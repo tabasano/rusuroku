@@ -5,6 +5,12 @@
 #include "rusuroku.h"
 
 #define MAX_LOADSTRING 1000
+#define LINE(x0,y0,x1,y1) \
+			{MoveToEx(hdc,x0,y0,NULL);\
+			LineTo(hdc,x1,y1);}
+HPEN penline = CreatePen(PS_SOLID, 1, RGB(200, 0, 100));
+HPEN penline2 = CreatePen(PS_SOLID, 1, RGB(200, 0, 200));
+HPEN penb = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
 
 // グローバル変数:
 HINSTANCE hInst;                                // 現在のインターフェイス
@@ -163,11 +169,13 @@ void SetWaveHdr(PWAVEHDR &pWaveHdr, PBYTE &pBuffer, ULONG size, DWORD flag, DWOR
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
-    static const INT    bufferNum = 20;
+    static const INT    bufferNum = 40;
     static HWND         hwndStatus = NULL;
     static INT          bufferNumR = bufferNum; //successfully allocated
     static DWORD        logstep = 10;
+    static DWORD        timerc = 0;
     static LPBYTE       lpWaveData[bufferNum];
+    static LPBYTE       picBuffer;
     static HWAVEIN      hwi = NULL;
     static WAVEHDR      wh[bufferNum];
     static PWAVEHDR     pWaveHdr[bufferNum];
@@ -180,14 +188,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        recsec;
     static BOOL         stop = FALSE;
     static time_t       timer;
+    static LPBYTE       ptmpBuffer = NULL;
+
+    static DOUBLE       timeSecond = 0;
+    static DWORD        tmpBaseSec = 0;
+    static DWORD        rsize = 0;
+    static DWORD        tmpBufferSize = 0;
+    static DWORD        dwRecordSecond = 3; //seconds per buffer
+
+    PAINTSTRUCT	paintstruct;
+    HDC hdc;
 
     static WAVEFORMATEX wf = { 0 };
     static INT bps = 16;
     static ULONG sps = 44100;
     static INT tag = WAVE_FORMAT_PCM;
 
+    RECT rc;
     ULONG i;
-    DWORD rsize;
     DWORD point;
     WCHAR ibuf[1000];
 
@@ -220,7 +238,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_CREATE: {
         INITCOMMONCONTROLSEX ic;
-        DWORD dwRecordSecond = 6; //seconds per buffer
         DWORD dwDataSize;
 
         ic.dwSize = sizeof(INITCOMMONCONTROLSEX);
@@ -254,6 +271,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         ou.open(name, ios::out | ios::binary | ios::trunc | ios::ate);
         writeheader(wf, 0, ou);
         dwDataSize = wf.nAvgBytesPerSec * dwRecordSecond;
+        picBuffer = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, dwDataSize);
 
         for (i = 0;i < bufferNum;i++)
         {
@@ -280,31 +298,132 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         time(&timer);
 
         waveInStart(hwi);
-        SetTimer(hwnd, 1, 200, NULL);
+        SetTimer(hwnd, 1, 100, NULL);
 
 
         //		if(WritePrivateProfileString(TEXT("init"), TEXT("mode"), TEXT("16"), TEXT("./rusuroku.ini"))==0)
         //			MessageBox(NULL, TEXT("init writeできません。"), NULL, MB_ICONWARNING);
         return 0;
     }
+    case WM_SIZE:
+        GetClientRect(hwnd, &rc);
+        SendMessage(hwndStatus, WM_SIZE, (WPARAM)SIZE_RESTORED, MAKELPARAM(rc.right, rc.bottom));
+        return 0;
+    case WM_PAINT:
+        DOUBLE tmpv;
+        DWORD step, ystep,cdiff;
+        DOUBLE xstep;
+        DWORD boxx,boxy;
+        DWORD center;
+        DWORD chk;
+        DWORD max;
+        DWORD ny, lx, ly, xover;
+        DOUBLE nx;
+        RECT rw, rs;
+        GetWindowRect(hwnd, &rw);
+        GetClientRect(hwnd, &rc);
+        GetClientRect(hwndStatus, &rs);
+        step = wf.nAvgBytesPerSec*((DWORD)timeSecond % dwRecordSecond);
+        //timerc is not correct value exactly. temporally use
+        step += wf.nAvgBytesPerSec / 10 * (timerc % 10);
+        hdc = BeginPaint(hwnd, &paintstruct);
+        boxx = rc.right;
+        boxy = rc.bottom-rs.bottom;
+        xover = boxx;
+        //paint only it is needed and not hidden
+        if (picBuffer && boxy > 0)
+        {
+            tmpv = 0;
+            cdiff = 1;
+            xstep = 0.5;
+            ystep = 5;
+            max = 0;
+            chk = 0;
+            center = boxy / 2;
+            SelectObject(hdc, GetStockObject(BLACK_PEN));
+            SelectObject(hdc, GetStockObject(BLACK_BRUSH));
+            Rectangle(hdc, 0, 0, boxx, boxy);
+            SelectObject(hdc, GetStockObject(WHITE_PEN));
+            LINE(0, center, boxx, center);
+            SelectObject(hdc, penline);
 
+            {
+                for (INT c = 0;c < wf.nChannels;c++) {
+                    if (c > 0)SelectObject(hdc, penline2);
+                    nx = 0;
+                    lx = 0;
+                    ny = center;
+                    ly = center;
+                    if (tmpBufferSize - 1 <= step) step = tmpBufferSize - 1;
+                    if (bps == 16) {
+                        for (INT i = 0;i < 15000;i += 4)
+                        {
+                            if (step + i - 1 >= tmpBufferSize) break;
+                            else
+                            {
+
+                                tmpv = *((SHORT*)picBuffer + (step + i) / sizeof(SHORT) + c);
+                                if (abs((LONG)tmpv) > max)
+                                    max = abs((LONG)tmpv);
+                                nx += 1 * xstep;
+                                ny = ((tmpv / 655)*ystep +  center) + c * cdiff;
+                                LINE(lx, ly, nx, ny);
+                                ly = ny;
+                                lx = nx;
+                                chk++;
+                                if (lx > xover) break;
+                            }
+                        }
+                    }
+                    else if (bps == 32) {
+                        tmpv = *((LONG*)picBuffer + step / sizeof(LONG)) / 0x10000;
+                    }
+                }
+                SelectObject(hdc, penline);
+                if (max > 5) {
+                    if (max>3000) SelectObject(hdc, GetStockObject(WHITE_BRUSH));
+                    else if (max>2000) SelectObject(hdc, GetStockObject(LTGRAY_BRUSH));
+                    else if (max>1000) SelectObject(hdc, GetStockObject(GRAY_BRUSH));
+                    else SelectObject(hdc, GetStockObject(DKGRAY_BRUSH));
+                    SelectObject(hdc, penline);
+                }
+                else{
+                    SelectObject(hdc, GetStockObject(BLACK_BRUSH));
+                    SelectObject(hdc, penline2);
+                }
+                //Rectangle(hdc, 0, 0, 50, 50);
+                //SelectObject(hdc, penline2);
+               // LINE(0, 0,50,50);
+                //if (chk > 10) LINE(52, 0, 52, 50);
+            }
+        }
+        EndPaint(hwnd, &paintstruct);
+
+        //InvalidateRect(hwndStatus, NULL, FALSE);
+        return 0;
+
+        //against flashing screen
+    case WM_ERASEBKGND:
+        return 0;
     case MM_WIM_DATA:
         TCHAR  szBuf[256];
-        LPBYTE d;
         DWORD tsize;
         DWORD size;
         BOOL re;
         tsize = wf.nAvgBytesPerSec;
-        d = (LPBYTE)((PWAVEHDR)lParam)->lpData;
+        ptmpBuffer = (LPBYTE)((PWAVEHDR)lParam)->lpData;
         rsize = (DWORD)((PWAVEHDR)lParam)->dwBytesRecorded;
+        memcpy(picBuffer, (const char*)ptmpBuffer, rsize);
+        tmpBaseSec = timeSecond;
+        tmpBufferSize = rsize;
         if (!stop) {
             while (rsize > 0) {
                 size = tsize;
                 if (rsize < tsize) size = rsize;
                 recsec = rectime / tsize;
-                re = checkNotZero(d, size, wf.wBitsPerSample, wf.wFormatTag, lv, per);
+                re = checkNotZero(ptmpBuffer, size, wf.wBitsPerSample, wf.wFormatTag, lv, per);
                 if (re) {
-                    savetmp(d, size, ou);
+                    savetmp(ptmpBuffer, size, ou);
                     recordedSize += size;
                     if (!nowRecording || recsec%logstep == 0) {
                         v.push_back(recsec);
@@ -316,7 +435,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
                 nowRecording = re;
                 rectime += size;
-                d += size;
+                ptmpBuffer += size;
                 rsize -= size;
             }
         }
@@ -344,21 +463,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_TIMER: {
         TCHAR  szBuf[256];
-        DWORD  dwSecond;
+        DWORD ms;
         MMTIME mmt;
         INT r;
 
         mmt.wType = TIME_SAMPLES;
         r = waveInGetPosition(hwi, &mmt, sizeof(MMTIME));
 
-        dwSecond = mmt.u.sample / wf.nSamplesPerSec;
+        timeSecond = mmt.u.sample / wf.nSamplesPerSec;
+        ms = (timeSecond - (DWORD)timeSecond) * 100;
+        timerc++;
         if (r == 0) {
-            wsprintf(szBuf, TEXT("%02d:%02d  buf: %d/%d rec: %d skip: %d"), dwSecond / 60, dwSecond % 60, bufferUsed + 1, bufferNumR, v.size(), x.size());
+            wsprintf(szBuf, TEXT("%02d:%02d.%01d  buf: %d/%d rec: %d skip: %d"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, timerc % 10, bufferUsed + 1, bufferNumR, v.size(), x.size());
         }
         else {
             wsprintf(szBuf, TEXT(" buf: %d formatTag:%d"), bufferUsed + 1, bufferNumR, wf.wFormatTag);
         }
 
+        InvalidateRect(hwnd, NULL, TRUE);
         SetWindowText(hwnd, szBuf);
 
         return 0;
@@ -398,6 +520,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
 
     case WM_DESTROY:
+        DeleteObject(penline);
+        DeleteObject(penline2);
+        DeleteObject(penb);
         if (lpWaveData != NULL)
             for (i = 0;i < bufferNumR;i++)
             {
