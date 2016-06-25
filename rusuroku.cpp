@@ -246,6 +246,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     break;
     case WM_KEYDOWN:
+    case WM_LBUTTONDOWN:
     {
         active=TRUE;
         return 0;
@@ -337,7 +338,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DWORD chk;
         DWORD max;
         DWORD maxpos;
-        DWORD ny, lx, ly, xover;
+        DWORD ny, lx, ly, xover, tx, ty;
+        DWORD dy;
         DOUBLE nx;
         RECT rw, rs;
         GetWindowRect(hwnd, &rw);
@@ -354,6 +356,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         tmpv = 0;
         hrate = 0x100;
         cdiff = 1;
+        dy = 1;
         xstep = 0.5;
         ystep = 5;
         max = 0;
@@ -364,9 +367,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Rectangle(hdc, 0, 0, boxx, boxy);
         if (silent) {
             SelectObject(hdc, penlineC);
+            tx = boxx / 2 - 10;
+            ty = center - 20;
+            LINE(tx, ty, tx + 20, ty + 40);
+            LINE(tx + 10, ty, tx + 10 + 20, ty + 40);
         }
         else {
             SelectObject(hdc, GetStockObject(WHITE_PEN));
+            LINE(0, center - dy, boxx, center - dy);
+            LINE(0, center + dy, boxx, center + dy);
+            dy = -20;
+            tx = boxx / 2 - 30;
+            ty = center - dy;
+            if (!active) {
+                LINE(tx, ty, tx + 20, ty + dy * 2);
+                LINE(tx + 20, ty + dy * 2, tx + 40, ty);
+                LINE(tx + 40, ty, tx + 60, ty + dy * 2);
+            }
         }
         LINE(0, center, boxx, center);
         //paint only it is needed and not hidden
