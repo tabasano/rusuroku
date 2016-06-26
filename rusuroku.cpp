@@ -196,6 +196,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static FLOAT        picstep = 0.5;
     static DWORD        recsec;
     static BOOL         stop = FALSE;
+    static BOOL         closing = FALSE;
     static time_t       timer;
     static DWORD        timerMS = 100;
     static LPBYTE       ptmpBuffer = NULL;
@@ -330,7 +331,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_PAINT:
         DOUBLE tmpv;
-        DOUBLE hrate;
+        DOUBLE hrate,prate;
         DWORD step, ystep,cdiff;
         DOUBLE xstep;
         DWORD boxx,boxy;
@@ -339,7 +340,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DWORD max;
         DWORD maxpos;
         DWORD ny, lx, ly, xover, tx, ty;
-        DWORD dy;
+        DWORD dy,dx;
         DOUBLE nx;
         RECT rw, rs;
         GetWindowRect(hwnd, &rw);
@@ -365,7 +366,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         SelectObject(hdc, GetStockObject(BLACK_PEN));
         SelectObject(hdc, GetStockObject(BLACK_BRUSH));
         Rectangle(hdc, 0, 0, boxx, boxy);
-        if (silent) {
+        if (silent || closing) {
             SelectObject(hdc, penlineC);
             tx = boxx / 2 - 10;
             ty = center - 20;
@@ -376,18 +377,56 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             SelectObject(hdc, GetStockObject(WHITE_PEN));
             LINE(0, center - dy, boxx, center - dy);
             LINE(0, center + dy, boxx, center + dy);
-            dy = -20;
-            tx = boxx / 2 - 30;
-            ty = center - dy;
             if (!active) {
-                LINE(tx, ty, tx + 20, ty + dy * 2);
-                LINE(tx + 20, ty + dy * 2, tx + 40, ty);
-                LINE(tx + 40, ty, tx + 60, ty + dy * 2);
+                SelectObject(hdc, penline);
+                prate = (timerc % 10) >= 5  ? 2 : -2;
+                dx = 4;
+                tx = boxx / 2 - 40;
+                ty = center;
+                LINE(tx, ty, tx + dx, ty + 3 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 6 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 8 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 9 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 10 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 9 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 8 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 6 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty + 3 * prate);
+                tx += dx;
+                LineTo(hdc,tx + dx, ty);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 3 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 6 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 8 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 9 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 10 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 9 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 8 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 6 * prate);
+                tx += dx;
+                LineTo(hdc, tx + dx, ty - 3 * prate);
+                tx += dx;
+                LineTo(hdc,tx + dx, ty);
             }
         }
         LINE(0, center, boxx, center);
         //paint only it is needed and not hidden
-        if (picflag == PIC_ON && active && picBuffer && boxy > 0 && !silent)
+        if (picflag == PIC_ON && active && picBuffer && boxy > 0 && !silent && !closing)
         {
             SelectObject(hdc, penline);
 
@@ -595,9 +634,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 waveInUnprepareHeader(hwi, pWaveHdr[i], sizeof(WAVEHDR));
             }
             waveInClose(hwi);
-            SetWindowText(hwnd, TEXT("waveInClose..."));
+            closing = TRUE;
+            SetWindowText(hwnd, TEXT("closing..."));
             //show this message for waiting rest buffer writing down. replace it with better solution if exist
-            res = MessageBox(NULL, TEXT("waveInClose..."), TEXT("OK"), MB_OKCANCEL);
+            res = MessageBox(NULL, TEXT("end of recording, bye..."), TEXT("waveIn"), MB_OK);
             //while (! ending) Sleep(100);
             writedatasize(recordedSize, ou);
             ou.close();
@@ -680,68 +720,101 @@ BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, vector<DWORD> &lv, FLO
     DOUBLE fh = (DOUBLE)per;
     DWORD a;
     DWORD c, m;
+    DWORD bl;
+    DWORD block = 4;
+    DWORD blocksize;
+    DWORD start;
+    DWORD current;
     if (tag == WAVE_FORMAT_IEEE_FLOAT && bit == 32) {
         size = size / sizeof(FLOAT);
-        for (c = 0; c < size; c++) {
-            if (((FLOAT*)d)[c] > fh || ((FLOAT*)d)[c] < -fh)
-            {
-                a = abs(((FLOAT*)d)[c]) / fh;
-                lv.push_back(a);
-                ret = TRUE;
-                break;
+        blocksize = size / block;
+        for (c = 0; c < blocksize; c++) {
+            start = 0;
+            for (bl = 0; bl < block; bl++) {
+                current = c + start;
+                if (((FLOAT*)d)[current] > fh || ((FLOAT*)d)[current] < -fh)
+                {
+                    a = abs(((FLOAT*)d)[current]) / fh;
+                    lv.push_back(a);
+                    ret = TRUE;
+                    break;
+                }
+                start += blocksize;
             }
         }
     }
     else if (tag == WAVE_FORMAT_IEEE_FLOAT && bit == 64) {
         size = size / sizeof(DOUBLE);
-        for (c = 0; c < size; c++) {
-            if (((DOUBLE*)d)[c] > fh || ((DOUBLE*)d)[c] < -fh)
-            {
-                a = abs(((DOUBLE*)d)[c]) / fh;
-                lv.push_back(a);
-                ret = TRUE;
-                break;
+        blocksize = size / block;
+        for (c = 0; c < blocksize; c++) {
+            start = 0;
+            for (bl = 0; bl < block; bl++) {
+                current = c + start;
+                if (((DOUBLE*)d)[current] > fh || ((DOUBLE*)d)[current] < -fh)
+                {
+                    a = abs(((DOUBLE*)d)[current]) / fh;
+                    lv.push_back(a);
+                    ret = TRUE;
+                    break;
+                }
+                start += blocksize;
             }
         }
     }
     else if (bit == 16) {
         h = SHORTMAX*per;
         size = size / sizeof(SHORT);
-        for (c = 0; c < size; c++) {
-            //if (((SHORT*)d)[c] - 32768 > h || ((SHORT*)d)[c] - 32768 < -h)
-            if (((SHORT*)d)[c] > h || ((SHORT*)d)[c] < -h)
-            {
-                a = abs(((SHORT*)d)[c]) / 0x80;
-                lv.push_back(a);
-                ret = TRUE;
-                break;
+        blocksize = size / block;
+        for (c = 0; c < blocksize; c++) {
+            start = 0;
+            for (bl = 0; bl < block; bl++) {
+                current = c + start;
+                if (((SHORT*)d)[current] > h || ((SHORT*)d)[current] < -h)
+                {
+                    a = abs(((SHORT*)d)[current]) / 0x80;
+                    lv.push_back(a);
+                    ret = TRUE;
+                    break;
+                }
+                start += blocksize;
             }
         }
     }
     else if (bit == 32) {
         h = LONGMAX*per;
         size = size / sizeof(LONG);
-        for (c = 0; c < size; c++) {
-            if (((LONG*)d)[c] > h || ((LONG*)d)[c] < -h)
-            {
-                a = abs(((LONG*)d)[c]) / 0x8000;
-                lv.push_back(a);
-
-                ret = TRUE;
-                break;
+        blocksize = size / block;
+        for (c = 0; c < blocksize; c++) {
+            start = 0;
+            for (bl = 0; bl < block; bl++) {
+                current = c + start;
+                if (((LONG*)d)[current] > h || ((LONG*)d)[current] < -h)
+                {
+                    a = abs(((LONG*)d)[current]) / 0x8000;
+                    lv.push_back(a);
+                    ret = TRUE;
+                    break;
+                }
+                start += blocksize;
             }
         }
     }
     else if (bit == 8) {
         h = B8MAX*per;
         m = 0x80;
-        for (c = 0; c < size; c++) {
-            if (d[c] > h + m || d[c] < -h + m)
-            {
-                a = abs((INT)(d[c] - m));
-                lv.push_back(a);
-                ret = TRUE;
-                break;
+        blocksize = size / block;
+        for (c = 0; c < blocksize; c++) {
+            start = 0;
+            for (bl = 0; bl < block; bl++) {
+                current = c + start;
+                if (d[current] > h + m || d[current] < -h + m)
+                {
+                    a = abs((INT)(d[current] - m));
+                    lv.push_back(a);
+                    ret = TRUE;
+                    break;
+                }
+                start += blocksize;
             }
         }
     }
