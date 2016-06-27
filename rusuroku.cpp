@@ -193,6 +193,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        activeCount = 0;
     static BOOL         nowRecording = FALSE;
     static FLOAT        per = 0;
+    static FLOAT        perstep = 0.005;
+    static FLOAT        perstepshift = 10;
     static FLOAT        picstep = 0.5;
     static DWORD        recsec;
     static BOOL         stop = FALSE;
@@ -219,6 +221,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     ULONG i;
     DWORD point;
     WCHAR ibuf[1000];
+    DOUBLE shiftr = 1.0;
 
     switch (message) {
 
@@ -247,11 +250,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     break;
     case WM_KEYDOWN:
-    case WM_LBUTTONDOWN:
-    {
+        if (GetKeyState(VK_SHIFT) < 0) shiftr = perstepshift;
+        switch(wParam){
+        case VK_DOWN:
+        case '-':
+            if (per > perstep*shiftr) per -= perstep*shiftr;
+            break;
+        case VK_UP:
+        case '+':
+            if (per < 1.0) per += perstep*shiftr;
+            break;
+        case VK_LEFT:
+            if (per > perstep/shiftr/2) per -= perstep/shiftr/2;
+            break;
+        case VK_RIGHT:
+            if (per < 1.0) per += perstep/shiftr/2;
+            break;
+        }
         active=TRUE;
         return 0;
-    }
+
+    case WM_LBUTTONDOWN:
+        active=TRUE;
+        return 0;
 
     case WM_CREATE: {
         INITCOMMONCONTROLSEX ic;
@@ -366,8 +387,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         SelectObject(hdc, GetStockObject(BLACK_PEN));
         SelectObject(hdc, GetStockObject(BLACK_BRUSH));
         Rectangle(hdc, 0, 0, boxx, boxy);
-        if (silent || closing) {
-            SelectObject(hdc, penlineC);
+        ty=(0x8000*per / hrate)*ystep;
+        SelectObject(hdc, penlineC);
+        LINE(0, center + ty, boxx, center + ty);
+        LINE(0, center - ty, boxx, center - ty);
+        if (silent || closing || stop) {
             tx = boxx / 2 - 10;
             ty = center - 20;
             LINE(tx, ty, tx + 20, ty + 40);
@@ -606,10 +630,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         if (r == 0) {
-            wsprintf(szBuf, TEXT("%02d:%02d.%01d  buf: %d/%d rec: %d skip: %d"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, timerc % 10, bufferUsed + 1, bufferNumR, v.size(), x.size());
+            wsprintf(szBuf, TEXT("%02d:%02d.%01d  buf: %d/%d rec: %d skip: %d limit: %d.%d%%"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, timerc % 10, bufferUsed + 1, bufferNumR, v.size(), x.size(), (INT)(per * 100), ((INT)(per * 1000) % 10));
         }
         else {
-            wsprintf(szBuf, TEXT(" buf: %d formatTag:%d"), bufferUsed + 1, bufferNumR, wf.wFormatTag);
+            wsprintf(szBuf, TEXT(" buf: %d formatTag:%d limit: %d.%d%%"), bufferUsed + 1, bufferNumR, wf.wFormatTag, (INT)(per*100), ((INT)(per * 1000) % 10));
         }
 
         InvalidateRect(hwnd, NULL, TRUE);
@@ -707,7 +731,7 @@ void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer
         o << buf << endl;
         last = v[i];
     }
-    if (v[v.size() - 1] < x[xi]) sec += x[xi] - v[v.size() - 1];
+    if (v.size()>0 && v[v.size() - 1] < x[xi]) sec += x[xi] - v[v.size() - 1];
     sprintf_s(buf, "%02d:%02d  end", sec / 60, sec % 60);
     o << buf << endl;
     o.close();
