@@ -27,7 +27,8 @@ vector<DWORD> x;
 vector<DWORD> lv;
 
 ofstream ou;
-void savetmp(LPBYTE lpWaveData, DWORD dwDataSize, ofstream &of, DWORD pos = 0);
+ofstream lps;
+void savetmp(LPBYTE lpWaveData, DWORD dwDataSize, ofstream &of);
 void writeheader(WAVEFORMATEX &waveform, DWORD size, ofstream &ou);
 void writedatasize(DWORD size, ofstream &ou);
 BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, vector<DWORD> &lv, FLOAT p);
@@ -185,6 +186,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static WAVEHDR      wh[bufferNum];
     static PWAVEHDR     pWaveHdr[bufferNum];
     static DWORD        recordedSize = 0;
+    static DWORD        lapseRecordedSize = 0;
+    static DWORD        minUnitByte = 0;
     static DWORD        rectime = 0;
     static DWORD        bufferUsed = 0;
     static BOOL         ending = FALSE;
@@ -198,6 +201,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static FLOAT        picstep = 0.5;
     static DWORD        recsec;
     static BOOL         stop = FALSE;
+    static BOOL         lapseRec = FALSE;
+    static BOOL         lapseRecStop = FALSE;
+    static DWORD        lapsePer = 16;
     static BOOL         closing = FALSE;
     static time_t       timer;
     static DWORD        timerMS = 100;
@@ -240,6 +246,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDM_RESUME:
             stop = FALSE;
             SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("rec resume..."));
+            break;
+        case IDM_LapseStart:
+            if (!lapseRec) {
+                wsprintf(name, TEXT("lapse.wav"));
+                lps.open(name, ios::out | ios::binary | ios::trunc | ios::ate);
+                writeheader(wf, 0, lps);
+            }
+            lapseRec = TRUE;
+            lapseRecStop = FALSE;
+            break;
+        case IDM_LapseStop:
+            lapseRecStop = TRUE;
             break;
         case IDM_EXIT:
             PostMessage(hwnd, WM_CLOSE, 0, 0);
@@ -301,6 +319,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         wf.wBitsPerSample = bps;
         wf.nBlockAlign = wf.wBitsPerSample / 8 * wf.nChannels;
         wf.nAvgBytesPerSec = wf.nSamplesPerSec * wf.nBlockAlign;
+        minUnitByte = wf.nChannels * (wf.wBitsPerSample / 8);
 
         if (waveInOpen(&hwi, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW) != MMSYSERR_NOERROR) {
             MessageBox(NULL, TEXT("WAVEデバイスのオープンに失敗しました。"), NULL, MB_ICONWARNING);
@@ -308,7 +327,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         }
 
         wsprintf(name, TEXT("test.wav"));
-
         ou.open(name, ios::out | ios::binary | ios::trunc | ios::ate);
         writeheader(wf, 0, ou);
         dwDataSize = wf.nAvgBytesPerSec * dwRecordSecond;
@@ -337,6 +355,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Sleep(200);
         // 現在時刻の取得
         time(&timer);
+        fftwSetup();
 
         waveInStart(hwi);
         SetTimer(hwnd, 1, timerMS, NULL);
@@ -556,6 +575,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         TCHAR  szBuf[256];
         DWORD tsize;
         DWORD size;
+        DWORD blstep;
         BOOL re;
         tsize = wf.nAvgBytesPerSec;
         ptmpBuffer = (LPBYTE)((PWAVEHDR)lParam)->lpData;
@@ -563,6 +583,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (picBuffer) memcpy(picBuffer, (const char*)ptmpBuffer, rsize);
         tmpBaseSec = timeSecond;
         tmpBufferSize = rsize;
+        if (lapseRec && ! lapseRecStop) {
+            if (rsize > tsize)
+            {
+                INT cmax=8;
+                size = rsize / lapsePer / cmax;
+                blstep = size / minUnitByte * minUnitByte;
+                for (INT c=0;c < cmax; c++) {
+                    savetmp(ptmpBuffer + blstep * c, size, lps);
+                    lapseRecordedSize += size;
+
+                }
+            }
+        }
         if (!stop) {
             while (rsize > 0) {
                 size = tsize;
@@ -665,6 +698,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             //while (! ending) Sleep(100);
             writedatasize(recordedSize, ou);
             ou.close();
+            if (lapseRec) {
+                writedatasize(lapseRecordedSize, lps);
+                lps.close();
+            }
             x.push_back(recsec);
             logsave(v, x, lv, timer, logstep);
 
@@ -686,7 +723,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 HeapFree(GetProcessHeap(), 0, lpWaveData[i]);
             }
-
+        fftwDestroy();
         PostQuitMessage(0);
 
         return 0;
@@ -749,6 +786,8 @@ BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, vector<DWORD> &lv, FLO
     DWORD blocksize;
     DWORD start;
     DWORD current;
+    DOUBLE fftlim = 1.;
+    fftw(d,size,bit,tag,fftlim);
     if (tag == WAVE_FORMAT_IEEE_FLOAT && bit == 32) {
         size = size / sizeof(FLOAT);
         blocksize = size / block;
@@ -922,7 +961,7 @@ void setwaveformRec(WAVEFORMATEX &wf, int format, int channels, long rate, int s
 }
 
 
-void savetmp(LPBYTE lpWaveData, DWORD dwDataSize, ofstream &of, DWORD pos)
+void savetmp(LPBYTE lpWaveData, DWORD dwDataSize, ofstream &of)
 {
 
     of.write(reinterpret_cast<const char *>(lpWaveData), dwDataSize);
