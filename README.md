@@ -19,7 +19,8 @@ waiting for new returning recorded buffer, drawing wave picture delays 3 seconds
 wait sometime for checking real effect by live setting threshold.
 
 
-cf.
+
+around source, cf.
 [1](http://eternalwindows.jp/winmm/wave/wave04.html)
 [2](http://www.fftw.org/install/windows.html)
 [3](http://www.koj-m.sakura.ne.jp/hurobint/index.php?fftw)

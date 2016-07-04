@@ -14,6 +14,10 @@ HPEN penline = CreatePen(PS_SOLID, 1, RGB(200, 0, 100));
 HPEN penline2 = CreatePen(PS_SOLID, 1, RGB(200, 0, 200));
 HPEN penlineC = CreatePen(PS_SOLID, 1, RGB(100, 100, 200));
 HPEN penb = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
+HPEN pen1 = CreatePen(PS_SOLID, 1, RGB(0, 55, 55));
+HPEN pen2 = CreatePen(PS_SOLID, 1, RGB(0, 155, 155));
+HPEN pen3 = CreatePen(PS_SOLID, 1, RGB(0, 205, 205));
+HPEN pen4 = CreatePen(PS_SOLID, 1, RGB(0, 255, 255));
 
 // グローバル変数:
 HINSTANCE hInst;                                // 現在のインターフェイス
@@ -31,8 +35,9 @@ ofstream lps;
 void savetmp(LPBYTE lpWaveData, DWORD dwDataSize, ofstream &of);
 void writeheader(WAVEFORMATEX &waveform, DWORD size, ofstream &ou);
 void writedatasize(DWORD size, ofstream &ou);
-BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, vector<DWORD> &lv, FLOAT p);
-void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer, DWORD step);
+BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, INT ch, vector<DWORD> &lv, FLOAT p);
+void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer, DWORD step, FLOAT per);
+BOOL trigerExec(WCHAR *cmd);
 
 const DWORD headersize = 0x02c;
 
@@ -206,14 +211,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        lapsePer = 16;
     static BOOL         closing = FALSE;
     static time_t       timer;
-    static DWORD        timerMS = 100;
+    static DWORD        timerMS = 200;
+    static LONG         tperSec = 1000 / timerMS;
     static LPBYTE       ptmpBuffer = NULL;
 
     static DOUBLE       timeSecond = 0;
     static DWORD        tmpBaseSec = 0;
     static DWORD        rsize = 0;
     static DWORD        tmpBufferSize = 0;
-    static DWORD        dwRecordSecond = 3; //seconds per buffer
+    static DWORD        dwRecordDeciSecond = 10; //deci seconds per buffer
+    static WCHAR        trgcmd[MAX_LOADSTRING];
 
     PAINTSTRUCT	paintstruct;
     HDC hdc;
@@ -308,10 +315,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         tag = GetPrivateProfileInt(TEXT("init"), TEXT("tag"), tag, myinit);
         logstep = GetPrivateProfileInt(TEXT("init"), TEXT("logstep"), logstep, myinit);
         picflag = GetPrivateProfileInt(TEXT("init"), TEXT("picflag"), picflag, myinit);
-        GetPrivateProfileString(TEXT("init"), TEXT("f"), TEXT("0.01"), ibuf, MAX_PATH, myinit);
+        GetPrivateProfileString(TEXT("init"), TEXT("f"), TEXT("0.04"), ibuf, MAX_PATH, myinit);
         swscanf_s(ibuf, TEXT("%f"), &per);
         GetPrivateProfileString(TEXT("init"), TEXT("picstep"), TEXT("0.5"), ibuf, MAX_PATH, myinit);
         swscanf_s(ibuf, TEXT("%f"), &picstep);
+        GetPrivateProfileString(TEXT("init"), TEXT("cmd"), TEXT(""), trgcmd, MAX_LOADSTRING, myinit);
 
         wf.nChannels = 2;
         wf.wFormatTag = tag;
@@ -329,9 +337,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         wsprintf(name, TEXT("test.wav"));
         ou.open(name, ios::out | ios::binary | ios::trunc | ios::ate);
         writeheader(wf, 0, ou);
-        dwDataSize = wf.nAvgBytesPerSec * dwRecordSecond;
+        dwDataSize = wf.nAvgBytesPerSec / 10 * dwRecordDeciSecond;
         picBuffer = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, dwDataSize);
 
+        if (!picBuffer) {
+            MessageBox(NULL, TEXT("pic memoryが確保できません。"), NULL, MB_ICONWARNING);
+            return -1;
+        }
         for (i = 0;i < bufferNum;i++)
         {
             lpWaveData[i] = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, dwDataSize);
@@ -382,13 +394,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DWORD ny, lx, ly, xover, tx, ty;
         DWORD dy,dx;
         DOUBLE nx;
+        DOUBLE fpeak;
+        DWORD srate;
+        DWORD byte;
         RECT rw, rs;
         GetWindowRect(hwnd, &rw);
         GetClientRect(hwnd, &rc);
         GetClientRect(hwndStatus, &rs);
-        step = wf.nAvgBytesPerSec*((DWORD)timeSecond % dwRecordSecond);
+        srate =(DWORD)(dwRecordDeciSecond / 10.0);
+        step = wf.nAvgBytesPerSec*( (DWORD)timeSecond % srate);
+        step += wf.nAvgBytesPerSec / tperSec * (timerc % tperSec);
         //timerc is not correct value exactly. temporally use
-        step += wf.nAvgBytesPerSec / 10 * (timerc % 10);
+        if (srate < 1)
+        {
+            step = 0;
+            step += wf.nAvgBytesPerSec / 10 * dwRecordDeciSecond / tperSec * (timerc % tperSec);
+        }
         hdc = BeginPaint(hwnd, &paintstruct);
         boxx = rc.right;
         boxy = rc.bottom-rs.bottom;
@@ -402,6 +423,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         ystep = 5;
         max = 0;
         chk = 0;
+        byte = bps / 8;
         center = boxy / 2;
         SelectObject(hdc, GetStockObject(BLACK_PEN));
         SelectObject(hdc, GetStockObject(BLACK_BRUSH));
@@ -422,49 +444,50 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             LINE(0, center + dy, boxx, center + dy);
             if (!active) {
                 SelectObject(hdc, penline);
-                prate = (timerc % 10) >= 5  ? 2 : -2;
+                prate = (timerc % (tperSec*2)) >= tperSec ? 2 : -2;
                 dx = 4;
                 tx = boxx / 2 - 40;
                 ty = center;
                 LINE(tx, ty, tx + dx, ty + 3 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 6 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 8 * prate);
+                LineTo(hdc, tx, ty + 6 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 9 * prate);
+                LineTo(hdc, tx, ty + 8 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 10 * prate);
+                LineTo(hdc, tx, ty + 9 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 9 * prate);
+                LineTo(hdc, tx, ty + 10 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 8 * prate);
+                LineTo(hdc, tx, ty + 9 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 6 * prate);
+                LineTo(hdc, tx, ty + 8 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty + 3 * prate);
+                LineTo(hdc, tx, ty + 6 * prate);
                 tx += dx;
-                LineTo(hdc,tx + dx, ty);
+                LineTo(hdc, tx, ty + 3 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 3 * prate);
+                LineTo(hdc,tx, ty);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 6 * prate);
+                LineTo(hdc, tx, ty - 3 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 8 * prate);
+                LineTo(hdc, tx, ty - 6 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 9 * prate);
+                LineTo(hdc, tx, ty - 8 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 10 * prate);
+                LineTo(hdc, tx, ty - 9 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 9 * prate);
+                LineTo(hdc, tx, ty - 10 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 8 * prate);
+                LineTo(hdc, tx, ty - 9 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 6 * prate);
+                LineTo(hdc, tx, ty - 8 * prate);
                 tx += dx;
-                LineTo(hdc, tx + dx, ty - 3 * prate);
+                LineTo(hdc, tx, ty - 6 * prate);
                 tx += dx;
-                LineTo(hdc,tx + dx, ty);
+                LineTo(hdc, tx, ty - 3 * prate);
+                tx += dx;
+                LineTo(hdc,tx, ty);
             }
         }
         LINE(0, center, boxx, center);
@@ -482,13 +505,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 if (tmpBufferSize - 1 <= step) step = tmpBufferSize - 1;
                 if (tag == WAVE_FORMAT_IEEE_FLOAT) {
                     if (bps == 32) {
-                        for (INT i = 0;i < maxpos;i += 4)
+                        for (INT i = 0;i < maxpos;i += wf.nChannels)
                         {
-                            if (step + i - 1 >= tmpBufferSize) break;
+                            if (step + (i + c + 1)*byte >= tmpBufferSize + 1) break;
                             else
                             {
 
-                                tmpv = *((FLOAT*)picBuffer + (step + i) / sizeof(FLOAT) )*0x8000;
+                                tmpv = *((FLOAT*)picBuffer + step / sizeof(FLOAT) + i + c) * 0x8000;
                                 if (abs((LONG)tmpv) > max)
                                     max = abs((LONG)tmpv);
                                 nx += 1 * xstep;
@@ -502,13 +525,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                         }
                     }
                     else if (bps == 64) {
-                        for (INT i = 0;i < maxpos;i += 4)
+                        for (INT i = 0;i < maxpos;i += wf.nChannels)
                         {
-                            if (step + i - 1 >= tmpBufferSize) break;
+                            if (step + (i + c + 1)*byte >= tmpBufferSize + 1) break;
                             else
                             {
 
-                                tmpv = *((DOUBLE*)picBuffer + (step + i) / sizeof(DOUBLE) )*0x8000;
+                                tmpv = *((DOUBLE*)picBuffer + step / sizeof(DOUBLE) + i + c) * 0x8000;
                                 if (abs((LONG)tmpv) > max)
                                     max = abs((LONG)tmpv);
                                 nx += 1 * xstep;
@@ -523,14 +546,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     }
                 }
                 else {
-                    for (INT i = 0;i < maxpos;i += 4)
+                    for (INT i = 0;i < maxpos;i += wf.nChannels)
                     {
-                        if (step + i - 1 >= tmpBufferSize) break;
+                        if (step + (i + c + 1)*byte >= tmpBufferSize + 1) break;
                         else
                         {
-                            if (bps == 16) tmpv = *((SHORT*)picBuffer + (step + i) / sizeof(SHORT) + c);
-                            else if (bps == 32) tmpv = *((LONG*)picBuffer + (step + i) / sizeof(LONG)) / 0x10000;
-                            else if (bps == 8) tmpv = ((LONG)*((LPBYTE)picBuffer + (step + i) / sizeof(BYTE)) - 0x80) * 0x100;
+                            if (bps == 16) tmpv = *((SHORT*)picBuffer + step / sizeof(SHORT) + i + c);
+                            else if (bps == 32) tmpv = *((LONG*)picBuffer + step / sizeof(LONG) + i + c) / 0x10000;
+                            else if (bps == 8) tmpv = ((LONG)*((LPBYTE)picBuffer + step / sizeof(BYTE) + i + c) - 0x80) * 0x100;
                             else break;
                             if (abs((LONG)tmpv) > max)
                                 max = abs((LONG)tmpv);
@@ -558,9 +581,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 SelectObject(hdc, GetStockObject(BLACK_BRUSH));
                 SelectObject(hdc, penline2);
             }
-            //Rectangle(hdc, 0, 0, 50, 50);
+            fpeak = fftwPeak(picBuffer + step*(bps/8), tmpBufferSize - step*(bps/8), wf.wBitsPerSample, wf.wFormatTag, wf.nChannels, wf.nSamplesPerSec, 0);
+            if (fpeak < 100)SelectObject(hdc, pen1);
+            else if (fpeak < 2000)SelectObject(hdc, pen2);
+            else if (fpeak < 3000)SelectObject(hdc, pen3);
+            else SelectObject(hdc, pen4);
+            LINE(0, 50, fpeak/20, 50);
+            //LINE(0, 0,50,50);
             //SelectObject(hdc, penline2);
-            // LINE(0, 0,50,50);
             //if (chk > 10) LINE(52, 0, 52, 50);
         }
         EndPaint(hwnd, &paintstruct);
@@ -570,13 +598,21 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         //against flashing screen
     case WM_ERASEBKGND:
-        return 0;
+        return 1;
     case MM_WIM_DATA:
         TCHAR  szBuf[256];
         DWORD tsize;
         DWORD size;
         DWORD blstep;
-        BOOL re;
+        DOUBLE fmax;
+        BOOL nz;
+        BOOL tmpRecording;
+        BOOL fftUse;
+        BOOL recStart;
+        LPBYTE pBuffer;
+        fftUse = FALSE;
+        silent = TRUE;
+        recStart = FALSE;
         tsize = wf.nAvgBytesPerSec;
         ptmpBuffer = (LPBYTE)((PWAVEHDR)lParam)->lpData;
         rsize = (DWORD)((PWAVEHDR)lParam)->dwBytesRecorded;
@@ -590,34 +626,43 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 size = rsize / lapsePer / cmax;
                 blstep = size / minUnitByte * minUnitByte;
                 for (INT c=0;c < cmax; c++) {
-                    savetmp(ptmpBuffer + blstep * c, size, lps);
+                    savetmp(picBuffer + blstep * c, size, lps);
                     lapseRecordedSize += size;
 
                 }
             }
         }
         if (!stop) {
+            pBuffer = picBuffer;
             while (rsize > 0) {
                 size = tsize;
                 if (rsize < tsize) size = rsize;
                 recsec = rectime / tsize;
-                re = checkNotZero(ptmpBuffer, size, wf.wBitsPerSample, wf.wFormatTag, lv, per);
-                if (re) {
-                    savetmp(ptmpBuffer, size, ou);
+                fmax = fftw(pBuffer, size, wf.wBitsPerSample, wf.wFormatTag, wf.nChannels, wf.nSamplesPerSec, 1.0, TRUE);
+                nz = checkNotZero(pBuffer, size, wf.wBitsPerSample, wf.wFormatTag, wf.nChannels, lv, per);
+                //tmpRecording = nz || fmax>per * 0x8000 / 2;
+                tmpRecording = nz || getPeak();
+                if (tmpRecording) {
+                    if (!nz) {
+                        fftUse = TRUE;
+                    }
+                    savetmp(pBuffer, size, ou);
                     recordedSize += size;
                     if (!nowRecording || recsec%logstep == 0) {
                         v.push_back(recsec);
+                        if (!nowRecording) {
+                            recStart = TRUE;
+                        }
                     }
                     silent = FALSE;
                 }
                 else if (nowRecording) {
                     x.push_back(recsec);
-                    silent = TRUE;
+                    silent = silent && TRUE;
                 };
-
-                nowRecording = re;
+                nowRecording = tmpRecording;
                 rectime += size;
-                ptmpBuffer += size;
+                pBuffer += size;
                 rsize -= size;
             }
         }
@@ -630,10 +675,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (stop) {
             wsprintf(szBuf, TEXT("%s"), TEXT("rec stop"));
         }
+        else if (fftUse) {
+            wsprintf(szBuf, TEXT("%s,%d fftmax:%d"), TEXT("バッファ追加"), bufferUsed, (LONG)fmax);
+        }
         else {
             wsprintf(szBuf, TEXT("%s,%d"), TEXT("バッファ追加"), bufferUsed);
         }
+        if (nz) wsprintf(szBuf, TEXT("%s +"), szBuf);
+        else wsprintf(szBuf, TEXT("%s -"), szBuf);
+        if (getPeak()) wsprintf(szBuf, TEXT("%s +"), szBuf);
+        else wsprintf(szBuf, TEXT("%s -"), szBuf);
+        wsprintf(szBuf, TEXT("%s %d"), szBuf, tmpBufferSize);
         SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+        if (recStart && wcslen(trgcmd)>0) trigerExec(trgcmd);
         //SetWindowText(hwnd, szBuf);
         return 0;
 
@@ -663,13 +717,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         if (r == 0) {
-            wsprintf(szBuf, TEXT("%02d:%02d.%01d  buf: %d/%d rec: %d skip: %d limit: %d.%d%%"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, timerc % 10, bufferUsed + 1, bufferNumR, v.size(), x.size(), (INT)(per * 100), ((INT)(per * 1000) % 10));
+            wsprintf(szBuf, TEXT("%02d:%02d.%01d  buf: %d/%d rec: %d skip: %d limit: %d.%d%%"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, (DWORD(timerc*10.0/tperSec) % 10), bufferUsed + 1, bufferNumR, v.size(), x.size(), (INT)(per * 100), ((INT)(per * 1000) % 10));
         }
         else {
             wsprintf(szBuf, TEXT(" buf: %d formatTag:%d limit: %d.%d%%"), bufferUsed + 1, bufferNumR, wf.wFormatTag, (INT)(per*100), ((INT)(per * 1000) % 10));
         }
 
-        InvalidateRect(hwnd, NULL, TRUE);
+        InvalidateRect(hwnd, NULL, FALSE);
+
         SetWindowText(hwnd, szBuf);
 
         return 0;
@@ -703,7 +758,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 lps.close();
             }
             x.push_back(recsec);
-            logsave(v, x, lv, timer, logstep);
+            logsave(v, x, lv, timer, logstep, per);
 
             KillTimer(hwnd, 1);
 
@@ -718,6 +773,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DeleteObject(penline2);
         DeleteObject(penlineC);
         DeleteObject(penb);
+        DeleteObject(pen1);
+        DeleteObject(pen2);
+        DeleteObject(pen3);
+        DeleteObject(pen4);
         if (lpWaveData != NULL)
             for (i = 0;i < bufferNumR;i++)
             {
@@ -735,8 +794,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     return DefWindowProc(hwnd, message, wParam, lParam);
 }
+BOOL trigerExec(WCHAR *cmd)
+{
+    ShellExecute(NULL, TEXT("open"), cmd, NULL, NULL, SW_SHOWNORMAL);
+    return TRUE;
+}
+void debugv(vector<DWORD> &v, vector<DWORD> &x)
+{
+    DOUBLE r;
+    r = 100000;
+    for (DWORD i = 0; i < (int)v.size(); ++i) {
+        v[i] = v[i] * r;
+    }
 
-void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer, DWORD step)
+    for (DWORD i = 0; i < (int)x.size(); ++i) {
+        x[i] = x[i] * r;
+    }
+}
+void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer, DWORD step, FLOAT per)
 {
     ofstream o;
     DWORD last = 0;
@@ -749,6 +824,7 @@ void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer
     ctime_s(buf, 255, &timer);
     if (step == 0) step = 1;
 
+    //debugv(v, x);
     wsprintf(logname, TEXT("reclog.txt"));
 
     o.open(logname, ios::out | ios::trunc);
@@ -771,10 +847,11 @@ void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer
     if (v.size()>0 && v[v.size() - 1] < x[xi]) sec += x[xi] - v[v.size() - 1];
     sprintf_s(buf, "%02d:%02d  end", sec / 60, sec % 60);
     o << buf << endl;
+    o << "f=" << per << endl;
     o.close();
 }
 
-BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, vector<DWORD> &lv, FLOAT per)
+BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, INT ch, vector<DWORD> &lv, FLOAT per)
 {
     BOOL ret = FALSE;
     DOUBLE h;
@@ -786,8 +863,6 @@ BOOL checkNotZero(LPBYTE d, DWORD size, INT bit, INT tag, vector<DWORD> &lv, FLO
     DWORD blocksize;
     DWORD start;
     DWORD current;
-    DOUBLE fftlim = 1.;
-    fftw(d,size,bit,tag,fftlim);
     if (tag == WAVE_FORMAT_IEEE_FLOAT && bit == 32) {
         size = size / sizeof(FLOAT);
         blocksize = size / block;
