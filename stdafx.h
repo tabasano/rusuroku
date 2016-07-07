@@ -14,6 +14,7 @@
 #include <iostream>
 #include <fstream>
 #include <windows.h>
+#include <windowsx.h>
 #include <CommCtrl.h>
 
 #include <vector>
