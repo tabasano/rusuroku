@@ -356,6 +356,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             stop = FALSE;
             stopAll = FALSE;
             closing = FALSE;
+            ending = FALSE;
             if (waveInOpen(&hwi, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW) != MMSYSERR_NOERROR) {
                 MessageBox(NULL, TEXT("WAVEデバイスのオープンに失敗しました。"), NULL, MB_ICONWARNING);
                 return -1;
@@ -378,7 +379,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             break;
         case IDM_playSTART:
-            if(!stop)  MessageBox(NULL, TEXT("録音中です。"), NULL, MB_ICONWARNING);
+            if (!stop && recordedSize>0)  MessageBox(NULL, TEXT("録音中です。"), NULL, MB_ICONWARNING);
+            else if (!stop && recordedSize==0)  MessageBox(NULL, TEXT("まず録音してください。\nShift-Enter: record\nSPACE: stop\nEnter: play"), NULL, MB_ICONWARNING);
             else if (recordedSize>0 && waveOutOpen(&hWaveOut, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW))
             {
                 MessageBox(NULL, TEXT("再生できません。"), NULL, MB_ICONWARNING);
@@ -902,6 +904,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         else {
             wsprintf(szBuf, TEXT("%s,%d"), TEXT("バッファ追加"), bufferUsed);
         }
+        //mark "+-" => threshold big,fftw little
         if (nz) wsprintf(szBuf, TEXT("%s +"), szBuf);
         else wsprintf(szBuf, TEXT("%s -"), szBuf);
         if (getPeak()) wsprintf(szBuf, TEXT("%s +"), szBuf);
@@ -1062,11 +1065,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         if (playing) {
-            wsprintf(szBuf, TEXT("%02d:%02d.%01d  %02d:%02d"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, (DWORD(timerc*10.0/tperSec) % 10), recordedSec / 60, recordedSec % 60);
+            wsprintf(szBuf, TEXT("rusuroku: |>> %02d:%02d.%01d  %02d:%02d"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, (DWORD(timerc*10.0/tperSec) % 10), recordedSec / 60, recordedSec % 60);
         }
         else {
             if (r == 0) {
-                wsprintf(szBuf, TEXT("%02d:%02d.%01d  buf: %d/%d rec: %d skip: %d limit: %d.%d%%"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, (DWORD(timerc*10.0/tperSec) % 10), bufferUsed + 1, bufferNumR, v.size(), x.size(), (INT)(per * 100), ((INT)(per * 1000) % 10));
+                wsprintf(szBuf, TEXT("rusuroku: [*] %02d:%02d.%01d  buf: %d/%d rec: %d skip: %d limit: %d.%d%%"), (DWORD)timeSecond / 60, (DWORD)timeSecond % 60, (DWORD(timerc*10.0/tperSec) % 10), bufferUsed + 1, bufferNumR, v.size(), x.size(), (INT)(per * 100), ((INT)(per * 1000) % 10));
             }
             else {
                 wsprintf(szBuf, TEXT(" buf: %d formatTag:%d limit: %d.%d%%"), bufferUsed + 1, bufferNumR, wf.wFormatTag, (INT)(per*100), ((INT)(per * 1000) % 10));
