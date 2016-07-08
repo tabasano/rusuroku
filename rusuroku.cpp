@@ -11,6 +11,9 @@
 #define LINE(x0,y0,x1,y1) \
 			{MoveToEx(hdc,x0,y0,NULL);\
 			LineTo(hdc,x1,y1);}
+#define BGLINE(x0,y0,x1,y1) \
+			{MoveToEx(hMemDC,x0,y0,NULL);\
+			LineTo(hMemDC,x1,y1);}
 HPEN penline = CreatePen(PS_SOLID, 1, RGB(200, 0, 100));
 HPEN penline2 = CreatePen(PS_SOLID, 1, RGB(200, 0, 200));
 HPEN penlineC = CreatePen(PS_SOLID, 1, RGB(100, 100, 200));
@@ -28,6 +31,7 @@ WCHAR szWindowClass[MAX_LOADSTRING];            // メイン ウィンドウ クラス名
 WCHAR name[MAX_LOADSTRING];
 #define myinit TEXT("./rusuroku.ini")
 //WCHAR initf[MAX_LOADSTRING];
+vector<DWORD> rv;
 vector<DWORD> v;
 vector<DWORD> x;
 vector<DWORD> lv;
@@ -269,6 +273,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        rectime = 0;
     static DWORD        bufferUsed = 0;
     static BOOL         playing = FALSE;
+    static BOOL         playAfterRec = FALSE;
     static BOOL         ending = FALSE;
     static BOOL         active = FALSE;
     static BOOL         silent = FALSE;
@@ -312,6 +317,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     PAINTSTRUCT	paintstruct;
     HDC hdc;
 
+    // double buffer
+    static HBITMAP  hBitmap;
+    static HDC      hMemDC;
+    static DWORD    bg_width;
+    static DWORD    bg_hight;
+    static BOOL     bg_ready = FALSE;
+    static DOUBLE   hrate = 0x100;
+    static DWORD    ystep = 5;
+
     static WAVEFORMATEX wf = { 0 };
     static INT bps = 16;
     static ULONG sps = 44100;
@@ -338,6 +352,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             stop = TRUE;
             break;
         case IDM_recSTART:
+            recordedSize = 0;
             stop = FALSE;
             stopAll = FALSE;
             closing = FALSE;
@@ -347,20 +362,24 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             break;
         case IDM_recEND:
-            stop = TRUE;
-            stopAll = TRUE;
-            recEnd(hwnd, hwi, bufferNumR,recordedSize,lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
-            closing = TRUE;
-            Sleep(1000);
-            SetWindowText(hwnd, TEXT("rec end."));
+            if (!stop) {
+                stop = TRUE;
+                stopAll = TRUE;
+                recEnd(hwnd, hwi, bufferNumR, recordedSize, lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
+                closing = TRUE;
+                playAfterRec = TRUE;
+                Sleep(1000);
+                SetWindowText(hwnd, TEXT("rec end."));
 
-            if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW))
-            {
-                MessageBox(NULL, TEXT("再生できません。"), NULL, MB_ICONWARNING);
+                if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW))
+                {
+                    MessageBox(NULL, TEXT("再生できません。"), NULL, MB_ICONWARNING);
+                }
             }
             break;
         case IDM_playSTART:
-            if (waveOutOpen(&hWaveOut, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW))
+            if(!stop)  MessageBox(NULL, TEXT("録音中です。"), NULL, MB_ICONWARNING);
+            else if (recordedSize>0 && waveOutOpen(&hWaveOut, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW))
             {
                 MessageBox(NULL, TEXT("再生できません。"), NULL, MB_ICONWARNING);
             }
@@ -511,6 +530,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             wh[i].dwFlags = 0;
         }
         wsprintf(mainwavname, TEXT("test.wav"));
+
+        // setup background DC
+        bg_width = 1000;
+        bg_hight = 1000;
+        hdc = GetDC(hwnd);
+        hMemDC = CreateCompatibleDC(hdc);
+        hBitmap = CreateCompatibleBitmap(hdc, bg_width, bg_hight);
+        SelectObject(hMemDC, hBitmap);
+        //SelectObject(hMemDC, GetStockObject(DC_PEN));
+        //SelectObject(hMemDC, GetStockObject(DC_BRUSH));
+        ReleaseDC(hwnd, hdc);
         //		if(WritePrivateProfileString(TEXT("init"), TEXT("mode"), TEXT("16"), TEXT("./rusuroku.ini"))==0)
         //			MessageBox(NULL, TEXT("init writeできません。"), NULL, MB_ICONWARNING);
         return 0;
@@ -521,10 +551,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_PAINT:
         DOUBLE tmpv;
-        DOUBLE hrate,prate;
-        DWORD step, ystep,cdiff;
+        DOUBLE prate;
+        DWORD step, cdiff;
         DOUBLE xstep;
-        DWORD boxx,boxy;
+        DWORD boxx, boxy;
+        DWORD bg_boxy;
         DWORD center;
         DWORD chk;
         DWORD max;
@@ -554,18 +585,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         xover = boxx;
         maxpos = 15000;
         tmpv = 0;
-        hrate = 0x100;
         cdiff = 1;
         dy = 1;
         xstep = 0.5;
-        ystep = 5;
         max = 0;
         chk = 0;
         byte = bps / 8;
         center = boxy / 2;
+        if (center + bg_hight / 2 > boxy) bg_boxy = boxy - (center - bg_hight / 2);
+        else bg_boxy = center + bg_hight / 2;
         SelectObject(hdc, GetStockObject(BLACK_PEN));
         SelectObject(hdc, GetStockObject(BLACK_BRUSH));
         Rectangle(hdc, 0, 0, boxx, boxy);
+        if(bg_ready) BitBlt(hdc, 0, center-bg_hight/2, bg_width, bg_boxy, hMemDC, 0, 0, SRCCOPY);
         ty=(0x8000*per / hrate)*ystep;
         SelectObject(hdc, penlineC);
         LINE(0, center + ty, boxx, center + ty);
@@ -581,12 +613,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             LINE(tx, ty, tx - 10, ty + 20);
             tx -= 10;
             LINE(tx, ty, tx - 10, ty + 20);
+            /*
             SelectObject(hdc, penp);
             for (dx = 0;dx < playpicmax;dx++) {
                 ny = (playpicA[dx] / 0x10000 / hrate)*ystep + center;
                 ty = (playpicB[dx] / 0x10000 / hrate)*ystep + center;
                 LINE(dx, ty, dx, ny);
             }
+            */
             // current position
             SelectObject(hdc, GetStockObject(WHITE_PEN));
             dx = (DOUBLE)timeSecond*playpicmax / recordedSec;
@@ -761,6 +795,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_ERASEBKGND:
         return 1;
     case MM_WIM_OPEN:
+        bg_ready = FALSE;
         if (bufferNumR == 0) {
             MessageBox(NULL, TEXT("memoryが確保できません。"), NULL, MB_ICONWARNING);
             return -1;
@@ -895,49 +930,67 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         //再生
     case MM_WOM_OPEN:
-        SetTimer(hwnd, 1, timerMS, NULL);
-        active = TRUE;
-        outEndingCount = 0;
-        tmpBufferSize = readbuffersize;
-        PostMessage(hwnd, MM_WIM_CLOSE, 0, 0);
-        Sleep(300);
-        while (!ending) {
-             Sleep(300);
-             MessageBox(hwnd, TEXT("再生します。"), TEXT(".."), MB_OK);
-        }
-        recordedSec = recordedSize / wf.nAvgBytesPerSec;
-        in.open(mainwavname, ios::in | ios::binary);
-        setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax);
-        in.seekg(headersize, ios::beg);
-        playpos = 0;
-        playdonepos = 0;
-        playskipTotal = 0;
-
-        SetWindowText(hwnd, TEXT("start playing."));
-        // Set up header
-        bufferNumPl = 0;
-        for (i = 0;i<bufferNumR;i++)
         {
-            if(i==bufferNumPlMax) break;
-            //lpWaveData[i] = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, readbuffersize);
-            memset(lpWaveData[i], 0, readbuffersize);
-            SetWaveHdr(wh[i], lpWaveData[i], readbuffersize, WHDR_BEGINLOOP | WHDR_ENDLOOP, 0);
-            //wh[i].dwFlags = WHDR_BEGINLOOP | WHDR_ENDLOOP;
-            //wh[i].lpData = (LPSTR)lpWaveData[i];
-
-            if (in.read((char *)picBuffer, readbuffersize))
-            {
-                memcpy(lpWaveData[i], (const char *)picBuffer, readbuffersize);
-                waveOutPrepareHeader(hWaveOut, &wh[i], sizeof(WAVEHDR));
-                waveOutWrite(hWaveOut, &wh[i], sizeof(WAVEHDR));
-                playpos += readbuffersize;
-                bufferNumPl += 1;
+            SetTimer(hwnd, 1, timerMS, NULL);
+            active = TRUE;
+            outEndingCount = 0;
+            tmpBufferSize = readbuffersize;
+            PostMessage(hwnd, MM_WIM_CLOSE, 0, 0);
+            Sleep(300);
+            if(playAfterRec && MessageBox(hwnd, TEXT("再生しますか?"), TEXT(".."), MB_OKCANCEL) != IDOK) {
+                playAfterRec = FALSE;
+                break;
             }
-            wsprintf(szBuf, TEXT("pl %d,%d"), playpos,i);
-            SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+            playAfterRec = FALSE;
+            while (!ending) {
+                 Sleep(300);
+            }
+            recordedSec = recordedSize / wf.nAvgBytesPerSec;
+            in.open(mainwavname, ios::in | ios::binary);
+            setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax);
+            // draw background dc
+            SelectObject(hMemDC, GetStockObject(BLACK_BRUSH));
+            SelectObject(hMemDC, GetStockObject(WHITE_PEN));
+            Rectangle(hMemDC, 0, 0, bg_width, bg_hight);
+            SelectObject(hMemDC, penp);
+            for (dx = 0;dx < playpicmax;dx++) {
+                ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                BGLINE(dx, ty, dx, ny);
+            }
+            bg_ready = TRUE;
+
+            in.seekg(headersize, ios::beg);
+            playpos = 0;
+            playdonepos = 0;
+            playskipTotal = 0;
+
+            SetWindowText(hwnd, TEXT("start playing."));
+            // Set up header
+            bufferNumPl = 0;
+            for (i = 0;i<bufferNumR;i++)
+            {
+                if(i==bufferNumPlMax) break;
+                //lpWaveData[i] = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, readbuffersize);
+                memset(lpWaveData[i], 0, readbuffersize);
+                SetWaveHdr(wh[i], lpWaveData[i], readbuffersize, WHDR_BEGINLOOP | WHDR_ENDLOOP, 0);
+                //wh[i].dwFlags = WHDR_BEGINLOOP | WHDR_ENDLOOP;
+                //wh[i].lpData = (LPSTR)lpWaveData[i];
+
+                if (in.read((char *)picBuffer, readbuffersize))
+                {
+                    memcpy(lpWaveData[i], (const char *)picBuffer, readbuffersize);
+                    waveOutPrepareHeader(hWaveOut, &wh[i], sizeof(WAVEHDR));
+                    waveOutWrite(hWaveOut, &wh[i], sizeof(WAVEHDR));
+                    playpos += readbuffersize;
+                    bufferNumPl += 1;
+                }
+                wsprintf(szBuf, TEXT("pl %d,%d"), playpos,i);
+                SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+            }
+            SetWindowText(hwnd, TEXT("play start..."));
+            playing = TRUE;
         }
-        SetWindowText(hwnd, TEXT("play start..."));
-        playing = TRUE;
         return TRUE;
 
     case MM_WOM_DONE:
@@ -1042,6 +1095,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DeleteObject(pen3);
         DeleteObject(pen4);
         DeleteObject(penp);
+        //close backup DC
+        DeleteDC(hMemDC);
+        DeleteObject(hBitmap);
         if (lpWaveData != NULL)
             for (i = 0;i < bufferNumR;i++)
             {
@@ -1097,23 +1153,28 @@ void logsave(vector<DWORD> &v, vector<DWORD> &x, vector<DWORD> &lv, time_t timer
     o.open(logname, ios::out | ios::trunc);
     o << "start at: " << buf << endl;
     o << "rec-time, real-time, localtime, sample-level" << endl;
-    for (DWORD i = 0; i < (int)v.size(); ++i) {
-        if (v[i] > x[xi]) {
+
+    auto lvl = lv.begin();
+    for (auto i = v.begin();i != v.end();++i) {
+        if (*i > x[xi]) {
             sprintf_s(buf, "--:--  %02d:%02d --", (INT)(x[xi] / 60), (INT)(x[xi] % 60));
             o << buf << endl;
             sec += x[xi] - last;
             xi++;
         }
         else {
-            sec += v[i] - last;
+            sec += *i - last;
         }
-        sprintf_s(buf, "%02d:%02d  %02d:%02d ", sec / 60, sec % 60, (INT)(v[i] / 60), (INT)(v[i] % 60));
+        sprintf_s(buf, "%02d:%02d  %02d:%02d  ", sec / 60, sec % 60, (INT)(*i / 60), (INT)(*i % 60));
         o << buf;
-        tmpt = timer - v[0] + v[i];
+        tmpt = timer - v[0] + *i;
         localtime_s(&lt, &tmpt );
-        sprintf_s(buf, "%02d:%02d:%02d %d", lt.tm_hour, lt.tm_min, lt.tm_sec, lv[i]);
+        DWORD num = distance(i, v.begin());
+        sprintf_s(buf, "%02d:%02d:%02d %d", lt.tm_hour, lt.tm_min, lt.tm_sec, *lvl);
+        lvl++;
         o << buf << endl;
-        last = v[i];
+        last = *i;
+        rv.push_back(sec);
     }
     if (v.size()>0 && v[v.size() - 1] < x[xi]) sec += x[xi] - v[v.size() - 1];
     sprintf_s(buf, "%02d:%02d  end", sec / 60, sec % 60);
