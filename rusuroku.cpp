@@ -173,6 +173,8 @@ void setpicvec(vector<LONG> &playpicA, vector<LONG> &playpicB, ifstream &in, WAV
 {
     BYTE buf[10];
     const WORD eachstep = 100;
+    fill(playpicA.begin(), playpicA.end(), 0);
+    fill(playpicB.begin(), playpicB.end(), 0);
     DWORD step = size / wf.nBlockAlign / max / eachstep * wf.nBlockAlign;
     LONG tmp = 0;
     if (step == 0) return;
@@ -274,6 +276,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        bufferUsed = 0;
     static BOOL         playing = FALSE;
     static BOOL         playAfterRec = FALSE;
+    static BOOL         usePlaySkip = FALSE;
     static BOOL         ending = FALSE;
     static BOOL         active = FALSE;
     static BOOL         silent = FALSE;
@@ -352,14 +355,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             stop = TRUE;
             break;
         case IDM_recSTART:
-            recordedSize = 0;
-            stop = FALSE;
-            stopAll = FALSE;
-            closing = FALSE;
-            ending = FALSE;
-            if (waveInOpen(&hwi, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW) != MMSYSERR_NOERROR) {
-                MessageBox(NULL, TEXT("WAVEデバイスのオープンに失敗しました。"), NULL, MB_ICONWARNING);
-                return -1;
+            if (!playing) {
+                usePlaySkip = FALSE;
+                recordedSize = 0;
+                stop = FALSE;
+                stopAll = FALSE;
+                closing = FALSE;
+                ending = FALSE;
+                if (waveInOpen(&hwi, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW) != MMSYSERR_NOERROR) {
+                    MessageBox(NULL, TEXT("WAVEデバイスのオープンに失敗しました。"), NULL, MB_ICONWARNING);
+                    return -1;
+                }
             }
             break;
         case IDM_recEND:
@@ -378,8 +384,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 }
             }
             break;
+        case IDM_playUseLVL:
+            usePlaySkip = !usePlaySkip;
+            break;
         case IDM_playSTART:
-            if (!stop && recordedSize>0)  MessageBox(NULL, TEXT("録音中です。"), NULL, MB_ICONWARNING);
+            //usePlaySkip = FALSE;
+            if (playing) ;
+            else if (!stop && recordedSize>0)  MessageBox(NULL, TEXT("録音中です。"), NULL, MB_ICONWARNING);
             else if (!stop && recordedSize==0)  MessageBox(NULL, TEXT("まず録音してください。\nShift-Enter: record\nSPACE: stop\nEnter: play"), NULL, MB_ICONWARNING);
             else if (recordedSize>0 && waveOutOpen(&hWaveOut, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW))
             {
@@ -600,10 +611,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         SelectObject(hdc, GetStockObject(BLACK_BRUSH));
         Rectangle(hdc, 0, 0, boxx, boxy);
         if(bg_ready) BitBlt(hdc, 0, center-bg_hight/2, bg_width, bg_boxy, hMemDC, 0, 0, SRCCOPY);
-        ty=(0x8000*per / hrate)*ystep;
-        SelectObject(hdc, penlineC);
-        LINE(0, center + ty, boxx, center + ty);
-        LINE(0, center - ty, boxx, center - ty);
+        if (usePlaySkip || !playing) {
+            ty=(0x8000*per / hrate)*ystep;
+            SelectObject(hdc, penlineC);
+            LINE(0, center + ty, boxx, center + ty);
+            LINE(0, center - ty, boxx, center - ty);
+        }
         if (playing) {
             tx = boxx / 2 - 10;
             ty = center - 20;
@@ -982,10 +995,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
                 if (in.read((char *)picBuffer, readbuffersize))
                 {
+                    playpos += readbuffersize;
+                    while (usePlaySkip && !in.eof() && !checkNotZero(picBuffer, readbuffersize, wf.wBitsPerSample, wf.wFormatTag, wf.nChannels, lv, per))
+                    {
+                        in.read((char *)picBuffer, readbuffersize);
+                        playpos += readbuffersize;
+                        playskipTotal += readbuffersize;
+                    }
                     memcpy(lpWaveData[i], (const char *)picBuffer, readbuffersize);
                     waveOutPrepareHeader(hWaveOut, &wh[i], sizeof(WAVEHDR));
                     waveOutWrite(hWaveOut, &wh[i], sizeof(WAVEHDR));
-                    playpos += readbuffersize;
                     bufferNumPl += 1;
                 }
                 wsprintf(szBuf, TEXT("pl %d,%d"), playpos,i);
@@ -1017,9 +1036,15 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             in.seekg(headersize + playpos, ios::beg);
             if (in.read((char *)picBuffer, readbuffersize))
             {
+                playpos += readbuffersize;
+                while (usePlaySkip && !in.eof() && !checkNotZero(picBuffer, readbuffersize, wf.wBitsPerSample, wf.wFormatTag, wf.nChannels, lv, per))
+                {
+                    in.read((char *)picBuffer, readbuffersize);
+                    playpos += readbuffersize;
+                    playskipTotal += readbuffersize;
+                }
                 memcpy(((PWAVEHDR)lParam)->lpData, (const char *)picBuffer,readbuffersize);
                 waveOutWrite(hWaveOut, (PWAVEHDR)lParam, sizeof(WAVEHDR));
-                playpos += readbuffersize;
             }
             wsprintf(szBuf, TEXT("pl %d"), playpos);
             SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
@@ -1083,8 +1108,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
     case WM_CLOSE:
         if (!stopAll) recEnd(hwnd, hwi, bufferNumR, recordedSize, lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
-        if (playing) waveOutClose(hWaveOut);
-        Sleep(1000);
+        if (playing) {
+            waveOutPause(hWaveOut);
+            SendMessage(hwnd, MM_WOM_CLOSE, 0, 0);
+            while (playing) Sleep(200);
+        }
+        Sleep(200);
         DestroyWindow(hwnd);
         return 0;
 
