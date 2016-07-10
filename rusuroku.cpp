@@ -3,6 +3,7 @@
 
 #include "stdafx.h"
 #include "rusuroku.h"
+#include "pen.h"
 
 #define MAX_LOADSTRING 1000
 #define playpicmax 1000
@@ -14,15 +15,7 @@
 #define BGLINE(x0,y0,x1,y1) \
 			{MoveToEx(hMemDC,x0,y0,NULL);\
 			LineTo(hMemDC,x1,y1);}
-HPEN penline = CreatePen(PS_SOLID, 1, RGB(200, 0, 100));
-HPEN penline2 = CreatePen(PS_SOLID, 1, RGB(200, 0, 200));
-HPEN penlineC = CreatePen(PS_SOLID, 1, RGB(100, 100, 200));
-HPEN penb = CreatePen(PS_SOLID, 1, RGB(255, 255, 255));
-HPEN pen1 = CreatePen(PS_SOLID, 1, RGB(0, 55, 55));
-HPEN pen2 = CreatePen(PS_SOLID, 1, RGB(0, 155, 155));
-HPEN pen3 = CreatePen(PS_SOLID, 1, RGB(0, 205, 205));
-HPEN pen4 = CreatePen(PS_SOLID, 1, RGB(0, 255, 255));
-HPEN penp = CreatePen(PS_SOLID, 1, RGB(20, 60, 255));
+
 
 // グローバル変数:
 HINSTANCE hInst;                                // 現在のインターフェイス
@@ -565,7 +558,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_PAINT:
         DOUBLE tmpv;
         DOUBLE prate;
-        DWORD step, cdiff;
+        DWORD step, cdiffx,cdiffy;
         DOUBLE xstep;
         DWORD boxx, boxy;
         DWORD bg_boxy;
@@ -598,7 +591,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         xover = boxx;
         maxpos = 15000;
         tmpv = 0;
-        cdiff = 1;
+        cdiffy = 1;
+        cdiffx = 1;
         dy = 1;
         xstep = 0.5;
         max = 0;
@@ -653,7 +647,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             LINE(0, center - dy, boxx, center - dy);
             LINE(0, center + dy, boxx, center + dy);
             if (!active) {
-                SelectObject(hdc, penline);
+                if (recordedSize==0) SelectObject(hdc, pendead);
+                else SelectObject(hdc, penline);
                 prate = (timerc % (tperSec*2)) >= tperSec ? 2 : -2;
                 dx = 4;
                 tx = boxx / 2 - 40;
@@ -708,8 +703,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
             for (INT c = 0;c < wf.nChannels;c++) {
                 if (c > 0)SelectObject(hdc, penline2);
-                nx = 0;
-                lx = 0;
+                nx = 0+c*cdiffx;
+                lx = nx;
                 ny = center;
                 ly = center;
                 if (tmpBufferSize - 1 <= step) step = tmpBufferSize - 1;
@@ -725,7 +720,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                                 if (abs((LONG)tmpv) > max)
                                     max = abs((LONG)tmpv);
                                 nx += 1 * xstep;
-                                ny = ((tmpv / hrate)*ystep + center) + c * cdiff;
+                                ny = ((tmpv / hrate)*ystep + center) + c * cdiffy;
                                 LINE(lx, ly, nx, ny);
                                 ly = ny;
                                 lx = nx;
@@ -745,7 +740,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                                 if (abs((LONG)tmpv) > max)
                                     max = abs((LONG)tmpv);
                                 nx += 1 * xstep;
-                                ny = ((tmpv / hrate)*ystep + center) + c * cdiff;
+                                ny = ((tmpv / hrate)*ystep + center) + c * cdiffy;
                                 LINE(lx, ly, nx, ny);
                                 ly = ny;
                                 lx = nx;
@@ -768,7 +763,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                             if (abs((LONG)tmpv) > max)
                                 max = abs((LONG)tmpv);
                             nx += 1 * xstep;
-                            ny = ((tmpv / hrate)*ystep +  center) + c * cdiff;
+                            ny = ((tmpv / hrate)*ystep +  center) + c * cdiffy;
                             LINE(lx, ly, nx, ny);
                             ly = ny;
                             lx = nx;
@@ -968,7 +963,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             SelectObject(hMemDC, GetStockObject(BLACK_BRUSH));
             SelectObject(hMemDC, GetStockObject(WHITE_PEN));
             Rectangle(hMemDC, 0, 0, bg_width, bg_hight);
-            SelectObject(hMemDC, penp);
+            SelectObject(hMemDC, penfullwav);
             for (dx = 0;dx < playpicmax;dx++) {
                 ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
                 ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
@@ -1126,7 +1121,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DeleteObject(pen2);
         DeleteObject(pen3);
         DeleteObject(pen4);
-        DeleteObject(penp);
+        DeleteObject(penfullwav);
         //close backup DC
         DeleteDC(hMemDC);
         DeleteObject(hBitmap);
