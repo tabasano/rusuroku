@@ -15,6 +15,19 @@
 #define BGLINE(x0,y0,x1,y1) \
 			{MoveToEx(hMemDC,x0,y0,NULL);\
 			LineTo(hMemDC,x1,y1);}
+#define BG2LINE(x0,y0,x1,y1) \
+			{MoveToEx(hMemDC2,x0,y0,NULL);\
+			LineTo(hMemDC2,x1,y1);}
+// LR speaker mark
+#define LvLINE(x,y0,y1) {\
+            LINE(x,y0,x,y1);\
+            LINE(x+1,y0,x+1,y1);\
+            LINE(x+2,y0,x+2,y1);\
+            LINE(x+3,y0, x+3,y1);}
+#define RvLINE(x,y0,y1) LvLINE(x-3,y0,y1)
+#define DBOX(name,dword) \
+            wsprintf(szBuf, TEXT("%s %d"), TEXT(name), dword);\
+            MessageBox(hwnd, szBuf, NULL, MB_OK);
 
 
 // グローバル変数:
@@ -33,6 +46,7 @@ vector<LONG> playpicB(playpicmax, 0);
 
 ofstream ou;
 ifstream in;
+ifstream in2;
 ofstream lps;
 void savetmp(LPBYTE lpWaveData, DWORD dwDataSize, ofstream &of);
 void writeheader(WAVEFORMATEX &waveform, DWORD size, ofstream &ou);
@@ -162,19 +176,21 @@ void SetWaveHdr(WAVEHDR &pWaveHdr, PBYTE &pBuffer, ULONG size, DWORD flag, DWORD
 //ou.write((const char*)((PWAVEHDR) lParam)->lpData,((PWAVEHDR) lParam)->dwBytesRecorded);
 //recordedsize +=((PWAVEHDR) lParam)->dwBytesRecorded;
 
-void setpicvec(vector<LONG> &playpicA, vector<LONG> &playpicB, ifstream &in, WAVEFORMATEX &wf, DWORD size, DWORD max)
+void setpicvec(vector<LONG> &playpicA, vector<LONG> &playpicB, ifstream &in, WAVEFORMATEX &wf, DWORD size, DWORD max, DWORD eacheach)
 {
     BYTE buf[10];
-    const WORD eachstep = 100;
+//    const WORD eachstep = 100;
     fill(playpicA.begin(), playpicA.end(), 0);
     fill(playpicB.begin(), playpicB.end(), 0);
-    DWORD step = size / wf.nBlockAlign / max / eachstep * wf.nBlockAlign;
+    if (eacheach == 0) eacheach = size / wf.nBlockAlign / max;
+    if (size / wf.nBlockAlign / max / eacheach < 1) eacheach = 1;
+    DWORD step = size / wf.nBlockAlign / max / eacheach * wf.nBlockAlign;
     LONG tmp = 0;
-    if (step == 0) return;
+    //if (step == 0) return;
     for (DWORD i = 0;i < max; i++)
     {
-        for (DWORD e = 0;e < eachstep;e++) {
-            in.seekg(headersize + (i*eachstep + e)*step, ios::beg);
+        for (DWORD e = 0;e < eacheach;e++) {
+            in.seekg(headersize + (i*eacheach + e)*step, ios::beg);
             in.read((char *)buf, wf.wBitsPerSample / 8);
             if (wf.wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
             {
@@ -231,6 +247,9 @@ INT recEnd(HWND hwnd, HWAVEIN &hwi, INT bufferNumR,DWORD recordedSize,BOOL lapse
     return res;
 }
 
+void test(DWORD x, DWORD y)
+{
+}
 //
 //  関数: WndProc(HWND, UINT, WPARAM, LPARAM)
 //
@@ -248,6 +267,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
     static const INT    bufferNum = 40;
     static DWORD        activeMax = 40;//active pic sec.
+    static DWORD        playpicBlockItemStep = 100;
     static HWND         hwndStatus = NULL;
     static INT          bufferNumR = bufferNum; //successfully allocated
     static INT          bufferNumPl = bufferNum; //play buffer
@@ -297,6 +317,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static LPBYTE       ptmpBuffer = NULL;
 
     static DOUBLE       timeSecond = 0;
+    static DOUBLE       timeSecondTmp = 0;
     static DWORD        tmpBaseSec = 0;
     static DWORD        rsize = 0;
     static DWORD        tmpBufferSize = 0;
@@ -316,9 +337,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     // double buffer
     static HBITMAP  hBitmap;
     static HDC      hMemDC;
+    static HBITMAP  hBitmap2;
+    static HDC      hMemDC2;
     static DWORD    bg_width;
     static DWORD    bg_hight;
     static BOOL     bg_ready = FALSE;
+    static BOOL     bg_ready2 = FALSE;
     static DOUBLE   hrate = 0x100;
     static DWORD    ystep = 5;
 
@@ -326,7 +350,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static INT bps = 16;
     static ULONG sps = 44100;
     static INT tag = WAVE_FORMAT_PCM;
+    static thread bgwork;
 
+    DWORD ny, lx, ly, xover, tx, ty;
+    DWORD dy, dx;
+    DOUBLE nx;
     RECT rc;
     ULONG i;
     DWORD point;
@@ -409,6 +437,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDM_LapseStop:
             lapseRecStop = TRUE;
             break;
+        case IDM_calcBgPic:
+            break;
         case IDM_EXIT:
             PostMessage(hwnd, WM_CLOSE, 0, 0);
             break;
@@ -453,9 +483,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case VK_HOME:
             playskipTotal -= playpos;
             playpos = 0;
+            break;
+        case VK_ESCAPE:
+            if (playing) {
+                playing = FALSE;
+                waveOutReset(hWaveOut);
+            }
+            break;
         }
+        wsprintf(szBuf, TEXT("ky %d"), wParam);
+        SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
         active=TRUE;
         InvalidateRect(hwnd, NULL, FALSE);
+        Sleep(100);
         return 0;
     case WM_MOUSEWHEEL:
         LONG i;
@@ -544,6 +584,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         hMemDC = CreateCompatibleDC(hdc);
         hBitmap = CreateCompatibleBitmap(hdc, bg_width, bg_hight);
         SelectObject(hMemDC, hBitmap);
+        hMemDC2 = CreateCompatibleDC(hdc);
+        hBitmap2 = CreateCompatibleBitmap(hdc, bg_width, bg_hight);
+        SelectObject(hMemDC2, hBitmap2);
         //SelectObject(hMemDC, GetStockObject(DC_PEN));
         //SelectObject(hMemDC, GetStockObject(DC_BRUSH));
         ReleaseDC(hwnd, hdc);
@@ -566,9 +609,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DWORD chk;
         DWORD max;
         DWORD maxpos;
-        DWORD ny, lx, ly, xover, tx, ty;
-        DWORD dy,dx;
-        DOUBLE nx;
         DOUBLE fpeak;
         DWORD srate;
         DWORD byte;
@@ -604,7 +644,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         SelectObject(hdc, GetStockObject(BLACK_PEN));
         SelectObject(hdc, GetStockObject(BLACK_BRUSH));
         Rectangle(hdc, 0, 0, boxx, boxy);
-        if(bg_ready) BitBlt(hdc, 0, center-bg_hight/2, bg_width, bg_boxy, hMemDC, 0, 0, SRCCOPY);
+        if (bg_ready2) BitBlt(hdc, 0, center - bg_hight / 2, bg_width, bg_boxy, hMemDC2, 0, 0, SRCCOPY);
+        else if (bg_ready) BitBlt(hdc, 0, center - bg_hight / 2, bg_width, bg_boxy, hMemDC, 0, 0, SRCCOPY);
         if (usePlaySkip || !playing) {
             ty=(0x8000*per / hrate)*ystep;
             SelectObject(hdc, penlineC);
@@ -648,7 +689,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             LINE(0, center + dy, boxx, center + dy);
             if (!active) {
                 if (recordedSize==0) SelectObject(hdc, pendead);
-                else SelectObject(hdc, penline);
+                else SelectObject(hdc, penwav1);
                 prate = (timerc % (tperSec*2)) >= tperSec ? 2 : -2;
                 dx = 4;
                 tx = boxx / 2 - 40;
@@ -696,13 +737,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
         }
         LINE(0, center, boxx, center);
+        // LR mark line
+        SelectObject(hdc, penwav1);
+        LvLINE(1, 0, boxy);
+        SelectObject(hdc, penwav2);
+        RvLINE(boxx - 1, 0, boxy);
         //paint only it is needed and not hidden
         if (picflag == PIC_ON && active && picBuffer && boxy > 0 && !silent && !closing && !ending || (playing && playpos>0))
         {
-            SelectObject(hdc, penline);
+            SelectObject(hdc, penwav1);
 
             for (INT c = 0;c < wf.nChannels;c++) {
-                if (c > 0)SelectObject(hdc, penline2);
+                if (c > 0)SelectObject(hdc, penwav2);
                 nx = 0+c*cdiffx;
                 lx = nx;
                 ny = center;
@@ -774,17 +820,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 }
                 
             }
-            SelectObject(hdc, penline);
+            SelectObject(hdc, penwav1);
             if (max > 5) {
                 if (max>3000) SelectObject(hdc, GetStockObject(WHITE_BRUSH));
                 else if (max>2000) SelectObject(hdc, GetStockObject(LTGRAY_BRUSH));
                 else if (max>1000) SelectObject(hdc, GetStockObject(GRAY_BRUSH));
                 else SelectObject(hdc, GetStockObject(DKGRAY_BRUSH));
-                SelectObject(hdc, penline);
+                SelectObject(hdc, penwav1);
             }
             else{
                 SelectObject(hdc, GetStockObject(BLACK_BRUSH));
-                SelectObject(hdc, penline2);
+                SelectObject(hdc, penwav2);
             }
             fpeak = fftwPeak(picBuffer + step*(bps/8), tmpBufferSize - step*(bps/8), wf.wBitsPerSample, wf.wFormatTag, wf.nChannels, wf.nSamplesPerSec, 0);
             if (fpeak < 100)SelectObject(hdc, pen1);
@@ -806,6 +852,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 1;
     case MM_WIM_OPEN:
         bg_ready = FALSE;
+        bg_ready2 = FALSE;
         if (bufferNumR == 0) {
             MessageBox(NULL, TEXT("memoryが確保できません。"), NULL, MB_ICONWARNING);
             return -1;
@@ -946,8 +993,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             active = TRUE;
             outEndingCount = 0;
             tmpBufferSize = readbuffersize;
-            PostMessage(hwnd, MM_WIM_CLOSE, 0, 0);
-            Sleep(300);
+            if (!ending) {
+                PostMessage(hwnd, MM_WIM_CLOSE, 0, 0);
+                Sleep(300);
+            }
             if(playAfterRec && MessageBox(hwnd, TEXT("再生しますか?"), TEXT(".."), MB_OKCANCEL) != IDOK) {
                 playAfterRec = FALSE;
                 break;
@@ -958,19 +1007,34 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             recordedSec = recordedSize / wf.nAvgBytesPerSec;
             in.open(mainwavname, ios::in | ios::binary);
-            setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax);
-            // draw background dc
-            SelectObject(hMemDC, GetStockObject(BLACK_BRUSH));
-            SelectObject(hMemDC, GetStockObject(WHITE_PEN));
-            Rectangle(hMemDC, 0, 0, bg_width, bg_hight);
-            SelectObject(hMemDC, penfullwav);
-            for (dx = 0;dx < playpicmax;dx++) {
-                ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
-                ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
-                BGLINE(dx, ty, dx, ny);
+            if (!bg_ready) {
+                SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("start calc pic."));
+                setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax,playpicBlockItemStep);
+                SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("end calc pic."));
+                //DBOX("bg1", recordedSize);
+                // draw background dc
+                SelectObject(hMemDC, GetStockObject(BLACK_BRUSH));
+                SelectObject(hMemDC, GetStockObject(WHITE_PEN));
+                Rectangle(hMemDC, 0, 0, bg_width, bg_hight);
+                SelectObject(hMemDC, penfullwav);
+                for (dx = 0;dx < playpicmax;dx++) {
+                    ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                    ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                    BGLINE(dx, ty, dx, ny);
+                }
+                bg_ready = TRUE;
             }
-            bg_ready = TRUE;
-
+            else
+            {
+                SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT(".-.-.-.-. use last pic."));
+                Sleep(100);
+            }
+            if (!bg_ready2) {
+                in2.open(mainwavname, ios::in | ios::binary);
+                if (bgwork.joinable()) bgwork.join();
+                bgwork = thread(setpicvec, ref(playpicA), ref(playpicB), ref(in2), wf, recordedSize, playpicmax, 0);
+                //DBOX("BG2", recordedSize);
+            }
             in.seekg(headersize, ios::beg);
             playpos = 0;
             playdonepos = 0;
@@ -1011,11 +1075,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return TRUE;
 
     case MM_WOM_DONE:
+        MMRESULT r;
         DWORD pstep;
         playdonepos += readbuffersize;
         wsprintf(szBuf, TEXT("pl %d.."), playpos);
         SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
-        if (in.eof()) {
+        if (in.eof() || !playing) {
+            for (i = 0;i < bufferNumPl;i++)
+            {
+                r = waveOutUnprepareHeader(hWaveOut, &wh[i], sizeof(WAVEHDR));
+                /*
+                if (r != MMSYSERR_NOERROR) {
+                wsprintf(szBuf, TEXT("error in unpreparing %d"), r);
+                MessageBox(hwnd, szBuf, TEXT(".."), MB_OK);
+                }
+                */
+            }
             waveOutClose(hWaveOut);
             /*
             outEndingCount++;
@@ -1044,17 +1119,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             wsprintf(szBuf, TEXT("pl %d"), playpos);
             SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
         }
+        if (timeSecond > 1 && !bg_ready2 && bgwork.joinable()) {
+
+            bgwork.join();
+            // draw background dc
+            SelectObject(hMemDC2, GetStockObject(BLACK_BRUSH));
+            SelectObject(hMemDC2, GetStockObject(WHITE_PEN));
+            Rectangle(hMemDC2, 0, 0, bg_width, bg_hight);
+            SelectObject(hMemDC2, penfullwav);
+            for (dx = 0;dx < playpicmax;dx++) {
+                ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                BG2LINE(dx, ty, dx, ny);
+            }
+            in2.close();
+            bg_ready2 = TRUE;
+            PostMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("end calc pic2............"));
+        }
         return TRUE;
 
     case MM_WOM_CLOSE:
-        // Enable and disable buttons
         in.close();
 
-        for (i = 0;i < bufferNumPl;i++)
-        {
-            waveOutUnprepareHeader(hWaveOut, &wh[i], sizeof(WAVEHDR));
-        }
-        //waveOutClose(hWaveOut);
         wsprintf(szBuf, TEXT("pl close %d.."), playpos);
         SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
         playing = FALSE;
@@ -1104,17 +1190,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     case WM_CLOSE:
         if (!stopAll) recEnd(hwnd, hwi, bufferNumR, recordedSize, lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
         if (playing) {
-            waveOutPause(hWaveOut);
-            SendMessage(hwnd, MM_WOM_CLOSE, 0, 0);
-            while (playing) Sleep(200);
+            playing = FALSE;
+            waveOutReset(hWaveOut);
+        }
+        if (bgwork.joinable()) {
+            bgwork.join();
         }
         Sleep(200);
         DestroyWindow(hwnd);
         return 0;
 
     case WM_DESTROY:
-        DeleteObject(penline);
-        DeleteObject(penline2);
+        DeleteObject(penwav1);
+        DeleteObject(penwav2);
         DeleteObject(penlineC);
         DeleteObject(penb);
         DeleteObject(pen1);
@@ -1125,6 +1213,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         //close backup DC
         DeleteDC(hMemDC);
         DeleteObject(hBitmap);
+        DeleteDC(hMemDC2);
+        DeleteObject(hBitmap2);
         if (lpWaveData != NULL)
             for (i = 0;i < bufferNumR;i++)
             {

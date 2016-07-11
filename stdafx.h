@@ -18,6 +18,8 @@
 #include <CommCtrl.h>
 
 #include <vector>
+#include <future>
+#include <thread>
 
 // C ランタイム ヘッダー ファイル
 #include <stdlib.h>
