@@ -350,7 +350,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static INT bps = 16;
     static ULONG sps = 44100;
     static INT tag = WAVE_FORMAT_PCM;
-    static thread bgwork;
+    //std::async  set a type the return type of call-func
+    static future<void> bgwork;
 
     DWORD ny, lx, ly, xover, tx, ty;
     DWORD dy, dx;
@@ -1031,8 +1032,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             if (!bg_ready2) {
                 in2.open(mainwavname, ios::in | ios::binary);
-                if (bgwork.joinable()) bgwork.join();
-                bgwork = thread(setpicvec, ref(playpicA), ref(playpicB), ref(in2), wf, recordedSize, playpicmax, 0);
+                //bgwork.get();
+
+                bgwork = std::async(std::launch::async, setpicvec, ref(playpicA), ref(playpicB), ref(in2), wf, recordedSize, playpicmax, 0);
                 //DBOX("BG2", recordedSize);
             }
             in.seekg(headersize, ios::beg);
@@ -1119,22 +1121,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             wsprintf(szBuf, TEXT("pl %d"), playpos);
             SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
         }
-        if (timeSecond > 1 && !bg_ready2 && bgwork.joinable()) {
-
-            bgwork.join();
-            // draw background dc
-            SelectObject(hMemDC2, GetStockObject(BLACK_BRUSH));
-            SelectObject(hMemDC2, GetStockObject(WHITE_PEN));
-            Rectangle(hMemDC2, 0, 0, bg_width, bg_hight);
-            SelectObject(hMemDC2, penfullwav);
-            for (dx = 0;dx < playpicmax;dx++) {
-                ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
-                ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
-                BG2LINE(dx, ty, dx, ny);
+        if (timeSecond > 1 && !bg_ready2) {
+            auto status = bgwork.wait_for(std::chrono::milliseconds(0));
+            if (status == std::future_status::ready) {
+                // draw background dc
+                SelectObject(hMemDC2, GetStockObject(BLACK_BRUSH));
+                SelectObject(hMemDC2, GetStockObject(WHITE_PEN));
+                Rectangle(hMemDC2, 0, 0, bg_width, bg_hight);
+                SelectObject(hMemDC2, penfullwav);
+                for (dx = 0;dx < playpicmax;dx++) {
+                    ny = (playpicA[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                    ty = (playpicB[dx] / 0x10000 / hrate)*ystep + bg_hight / 2;
+                    BG2LINE(dx, ty, dx, ny);
+                }
+                in2.close();
+                bg_ready2 = TRUE;
+                PostMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("end calc pic2............"));
             }
-            in2.close();
-            bg_ready2 = TRUE;
-            PostMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("end calc pic2............"));
         }
         return TRUE;
 
@@ -1193,9 +1196,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             playing = FALSE;
             waveOutReset(hWaveOut);
         }
-        if (bgwork.joinable()) {
-            bgwork.join();
-        }
+        //bgwork.get();
         Sleep(200);
         DestroyWindow(hwnd);
         return 0;
