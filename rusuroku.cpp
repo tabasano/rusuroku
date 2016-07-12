@@ -296,14 +296,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        activeCount = 0;
     static BOOL         nowRecording = FALSE;
     static LONG         playskip = 0;
-    static LONG         playskipBaseSec = 2;
+    static LONG         playskipBaseSec = 1;
     static LONG         playskipBaseByte;
     static LONG         playskipTotal;
     static FLOAT        per = 0;
     static FLOAT        perstep = 0.005;
     static FLOAT        perstepshift = 10;
     static FLOAT        picstep = 0.5;
-    static DWORD        shiftrate = 1;
+    DWORD        shiftrate = 1;
     static DWORD        recsec;
     static BOOL         stop = FALSE;
     static BOOL         stopAll = FALSE;
@@ -464,26 +464,37 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             if (per < 1.0) per += perstep*shiftr;
             break;
         case VK_LEFT:
-            playskip = -(LONG)shiftrate;
-            if ((DOUBLE)playpos+playskip*playskipBaseByte>0) {
-                playpos += playskip*playskipBaseByte;
-                playskipTotal += playskip*playskipBaseByte;
+            if (playing) {
+                playskip = -(LONG)shiftrate*3;
+                if ((DOUBLE)playpos + playskip*playskipBaseByte > 0) {
+                    //playpos -= readbuffersize*bufferNumPl;
+                    playpos += playskip*playskipBaseByte;
+                    playskipTotal += playskip*playskipBaseByte;
+                }
+                else {
+                    playskipTotal -= playpos;
+                    playpos = 0;
+                }
+                //waveOutReset(hWaveOut);
+                //waveOutRestart(hWaveOut);
             }
-            else {
-                playskipTotal -= playpos;
-                playpos = 0;
-            }
-            if (!playing && per > perstep/shiftr/2) per -= perstep/shiftr/2;
+            else if (per > perstep/shiftr/2) per -= perstep/shiftr/2;
             break;
         case VK_RIGHT:
-            playskip = shiftrate;
-            playpos += playskip*playskipBaseByte;
-            playskipTotal += playskip*playskipBaseByte;
-            if (!playing && per < 1.0) per += perstep/shiftr/2;
+            if (playing) {
+                playskip = shiftrate;
+                playpos += playskip*playskipBaseByte;
+                playskipTotal += playskip*playskipBaseByte;
+                //waveOutReset(hWaveOut);
+                //waveOutRestart(hWaveOut);
+            }
+            else if (per < 1.0) per += perstep / shiftr / 2;
             break;
         case VK_HOME:
             playskipTotal -= playpos;
             playpos = 0;
+            waveOutReset(hWaveOut);
+            waveOutRestart(hWaveOut);
             break;
         case VK_ESCAPE:
             if (playing) {
@@ -500,28 +511,41 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         return 0;
     case WM_MOUSEWHEEL:
         LONG i;
-        i = GET_WHEEL_DELTA_WPARAM(wParam)/ WHEEL_DELTA*playskipBaseByte;
-        wsprintf(szBuf, TEXT("wh %d"), GET_WHEEL_DELTA_WPARAM(wParam));
+        playskip = shiftrate;
+        i = GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA*playskipBaseByte*playskip;
+        wsprintf(szBuf, TEXT("wh %d, %d"), GET_WHEEL_DELTA_WPARAM(wParam),i);
         SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
-        if ((LONG)playpos + i > 0) {
-            if (playpos + i > recordedSize) i = recordedSize - playpos - playskipBaseByte;
+        if (i < 0) i *= 2;
+        if (playing && (LONG)playpos + i > 0) {
+            if ((LONG)playpos + i > recordedSize) i = recordedSize - playpos - playskipBaseByte;
             playskipTotal += i;
-            playpos += i;
+            if (readbuffersize*bufferNumPl < playpos) {
+                //playpos -= readbuffersize*bufferNumPl;
+                playpos += i;
+            }
+            else playpos = 0;
+
         }
         return 0;
+    case WM_LBUTTONUP:
+        if (playing) {
+            waveOutRestart(hWaveOut);
+        }
     case WM_LBUTTONDOWN:
-        POINT pt;
-        DWORD tmp;
-        pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        wsprintf(szBuf, TEXT("x:%d y:%d"), pt.x,pt.y);
-        SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
-        if (pt.x < playpicmax) {
-            playskipTotal -= playpos;
-            tmp = recordedSize / playpicmax * pt.x / minUnitByte * minUnitByte;
-            if (tmp > recordedSize) tmp = recordedSize - playskipBaseByte;
-            playpos = tmp;
-            playskipTotal += playpos;
-
+        if (playing) {
+            POINT pt;
+            DWORD tmp;
+            pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            wsprintf(szBuf, TEXT("x:%d y:%d"), pt.x, pt.y);
+            SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+            if (pt.x < playpicmax) {
+                playskipTotal -= playpos;
+                tmp = recordedSize / playpicmax * pt.x / minUnitByte * minUnitByte;
+                if (tmp > recordedSize) tmp = recordedSize - playskipBaseByte;
+                playpos = tmp;
+                playskipTotal += playpos;
+            }
+            waveOutReset(hWaveOut);
         }
         active=TRUE;
         return 0;
@@ -1010,7 +1034,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             in.open(mainwavname, ios::in | ios::binary);
             if (!bg_ready) {
                 SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("start calc pic."));
-                setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax,playpicBlockItemStep);
+                //setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax, playpicBlockItemStep);
+                setpicvec(playpicA, playpicB, in, wf, recordedSize, playpicmax, recordedSize);
                 SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("end calc pic."));
                 //DBOX("bg1", recordedSize);
                 // draw background dc

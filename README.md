@@ -24,6 +24,7 @@ around source, cf.
 [1](http://eternalwindows.jp/winmm/wave/wave04.html)
 [2](http://www.fftw.org/install/windows.html)
 [3](http://www.koj-m.sakura.ne.jp/hurobint/index.php?fftw)
+[4](http://qiita.com/termoshtt/items/d3cb7fe226cdd498d2ef)
 
 ---------------
 
