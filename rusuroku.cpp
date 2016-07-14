@@ -178,12 +178,13 @@ void SetWaveHdr(WAVEHDR &pWaveHdr, PBYTE &pBuffer, ULONG size, DWORD flag, DWORD
 
 void setpicvec(vector<LONG> &playpicA, vector<LONG> &playpicB, ifstream &in, WAVEFORMATEX &wf, DWORD size, DWORD max, DWORD eacheach)
 {
-    BYTE buf[10];
+    BYTE buf[100];
 //    const WORD eachstep = 100;
     fill(playpicA.begin(), playpicA.end(), 0);
     fill(playpicB.begin(), playpicB.end(), 0);
+    if (eacheach == 0) eacheach = size / wf.nBlockAlign / max / (wf.nAvgBytesPerSec / 40);
     if (eacheach == 0) eacheach = size / wf.nBlockAlign / max;
-    if (size / wf.nBlockAlign / max / eacheach < 1) eacheach = 1;
+    if (eacheach == 0 || size / wf.nBlockAlign / max / eacheach < 1) eacheach = 1;
     DWORD step = size / wf.nBlockAlign / max / eacheach * wf.nBlockAlign;
     LONG tmp = 0;
     //if (step == 0) return;
@@ -191,25 +192,27 @@ void setpicvec(vector<LONG> &playpicA, vector<LONG> &playpicB, ifstream &in, WAV
     {
         for (DWORD e = 0;e < eacheach;e++) {
             in.seekg(headersize + (i*eacheach + e)*step, ios::beg);
-            in.read((char *)buf, wf.wBitsPerSample / 8);
-            if (wf.wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
-            {
-                if (wf.wBitsPerSample == 32)
-                    tmp = ((FLOAT*)buf)[0]*0x8000;
-                else if (wf.wBitsPerSample == 64)
-                    tmp = ((DOUBLE*)buf)[0]*0x8000;
+            in.read((char *)buf, wf.nBlockAlign);
+            for (auto c = 0;c < wf.nChannels;c++) {
+                if (wf.wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
+                {
+                    if (wf.wBitsPerSample == 32)
+                        tmp = ((FLOAT*)buf)[c] * 0x8000;
+                    else if (wf.wBitsPerSample == 64)
+                        tmp = ((DOUBLE*)buf)[c] * 0x8000;
+                }
+                else
+                {
+                    if (wf.wBitsPerSample == 16)
+                        tmp = ((SHORT*)buf)[c] * 0x10000;
+                    else if (wf.wBitsPerSample == 32)
+                        tmp = ((LONG*)buf)[c];
+                    else if (wf.wBitsPerSample == 8)
+                        tmp = ((LONG)((LPBYTE*)buf)[c] - 0x80) * 0x1000000;
+                }
+                playpicA[i] = max(playpicA[i], tmp);
+                playpicB[i] = min(playpicB[i], tmp);
             }
-            else
-            {
-                if (wf.wBitsPerSample == 16)
-                    tmp = ((SHORT*)buf)[0] * 0x10000;
-                else if (wf.wBitsPerSample == 32)
-                    tmp = ((LONG*)buf)[0];
-                else if (wf.wBitsPerSample == 8)
-                    tmp = ((LONG)((LPBYTE*)buf)[0]-0x80)*0x1000000;
-            }
-            playpicA[i] = max(playpicA[i], tmp);
-            playpicB[i] = min(playpicB[i], tmp);
         }
     }
 }
@@ -293,6 +296,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static BOOL         ending = FALSE;
     static BOOL         active = FALSE;
     static BOOL         silent = FALSE;
+    static BOOL         startflash = FALSE;
     static DWORD        activeCount = 0;
     static BOOL         nowRecording = FALSE;
     static LONG         playskip = 0;
@@ -378,6 +382,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             break;
         case IDM_recSTART:
             if (!playing) {
+                startflash = TRUE;
                 usePlaySkip = FALSE;
                 recordedSize = 0;
                 stop = FALSE;
@@ -455,6 +460,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             shiftrate = 2;
         }
         switch(wParam){
+        case 'r':
+            //reset whole wave pic
+            bg_ready = FALSE;
+            bg_ready2 = FALSE;
+            break;
         case VK_DOWN:
         case '-':
             if (per > perstep*shiftr) per -= perstep*shiftr;
@@ -671,6 +681,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Rectangle(hdc, 0, 0, boxx, boxy);
         if (bg_ready2) BitBlt(hdc, 0, center - bg_hight / 2, bg_width, bg_boxy, hMemDC2, 0, 0, SRCCOPY);
         else if (bg_ready) BitBlt(hdc, 0, center - bg_hight / 2, bg_width, bg_boxy, hMemDC, 0, 0, SRCCOPY);
+        if(startflash) {
+            if(playing) SelectObject(hdc, GetStockObject(WHITE_BRUSH));
+            else SelectObject(hdc, brush1);
+            Rectangle(hdc, 0, 0, boxx, center / 4);
+            Rectangle(hdc, 0, boxy, boxx, boxy - center / 4);
+            startflash = FALSE;
+        }
         if (usePlaySkip || !playing) {
             ty=(0x8000*per / hrate)*ystep;
             SelectObject(hdc, penlineC);
@@ -1098,6 +1115,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             SetWindowText(hwnd, TEXT("play start..."));
             playing = TRUE;
+            startflash = TRUE;
         }
         return TRUE;
 
@@ -1143,7 +1161,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 memcpy(((PWAVEHDR)lParam)->lpData, (const char *)picBuffer,readbuffersize);
                 waveOutWrite(hWaveOut, (PWAVEHDR)lParam, sizeof(WAVEHDR));
             }
-            wsprintf(szBuf, TEXT("pl %d"), playpos);
+            if(bg_ready2) wsprintf(szBuf, TEXT("pl. %d"), playpos);
+            else wsprintf(szBuf, TEXT("pl %d"), playpos);
             SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
         }
         if (timeSecond > 1 && !bg_ready2) {
