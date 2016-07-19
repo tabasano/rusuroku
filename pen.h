@@ -11,3 +11,4 @@ HPEN pen3 = CreatePen(PS_SOLID, 1, RGB(0, 205, 205));
 HPEN pen4 = CreatePen(PS_SOLID, 1, RGB(0, 255, 255));
 HPEN penfullwav = CreatePen(PS_SOLID, 1, RGB(20, 60, 255));
 HPEN pendead = penfullwav;
+HPEN penplaymark = CreatePen(PS_SOLID, 1, RGB(20, 40, 160));

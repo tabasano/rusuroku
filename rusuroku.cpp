@@ -115,7 +115,7 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 
     wcex.cbSize = sizeof(WNDCLASSEX);
 
-    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.style = CS_HREDRAW | CS_VREDRAW | CS_DBLCLKS;
     wcex.lpfnWndProc = WndProc;
     wcex.cbClsExtra = 0;
     wcex.cbWndExtra = 0;
@@ -299,6 +299,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static BOOL         startflash = FALSE;
     static DWORD        activeCount = 0;
     static BOOL         nowRecording = FALSE;
+    static BOOL         recMode = FALSE;
     static LONG         playskip = 0;
     static LONG         playskipBaseSec = 1;
     static LONG         playskipBaseByte;
@@ -310,7 +311,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     DWORD        shiftrate = 1;
     static DWORD        recsec;
     static BOOL         stop = FALSE;
-    static BOOL         stopAll = FALSE;
+    static BOOL         finish = FALSE;
     static BOOL         lapseRec = FALSE;
     static BOOL         lapseRecStop = FALSE;
     static DWORD        lapsePer = 16;
@@ -386,9 +387,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 usePlaySkip = FALSE;
                 recordedSize = 0;
                 stop = FALSE;
-                stopAll = FALSE;
+                finish = FALSE;
                 closing = FALSE;
                 ending = FALSE;
+                recMode = TRUE;
                 if (waveInOpen(&hwi, WAVE_MAPPER, &wf, (DWORD)hwnd, 0, CALLBACK_WINDOW) != MMSYSERR_NOERROR) {
                     MessageBox(NULL, TEXT("WAVEデバイスのオープンに失敗しました。"), NULL, MB_ICONWARNING);
                     return -1;
@@ -398,10 +400,11 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case IDM_recEND:
             if (!stop) {
                 stop = TRUE;
-                stopAll = TRUE;
+                finish = TRUE;
                 recEnd(hwnd, hwi, bufferNumR, recordedSize, lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
                 closing = TRUE;
                 playAfterRec = TRUE;
+                recMode = FALSE;
                 Sleep(1000);
                 SetWindowText(hwnd, TEXT("rec end."));
 
@@ -426,7 +429,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             break;
 
         case IDM_RESUME:
-            if (!stopAll) {
+            if (!finish) {
                 stop = FALSE;
                 SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)TEXT("rec resume..."));
             }
@@ -460,8 +463,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             shiftrate = 2;
         }
         switch(wParam){
-        case 'r':
-            //reset whole wave pic
+        case 'R':
+            //reset whole wave pic, for debug..
             bg_ready = FALSE;
             bg_ready2 = FALSE;
             break;
@@ -537,10 +540,27 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
 
         }
         return 0;
+    case WM_LBUTTONDBLCLK:
+        GetClientRect(hwnd, &rc);
+            POINT pt;
+            DWORD tmp;
+            pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            if (rc.right / 2 > pt.x) {
+                if(recMode) SendMessage(hwnd, WM_COMMAND, (WPARAM)IDM_recEND, 0);
+                else SendMessage(hwnd, WM_COMMAND, (WPARAM)IDM_recSTART, 0);
+                //MessageBox(NULL, TEXT("dblclick -"), NULL, MB_ICONWARNING);
+            }
+            else
+            {
+                SendMessage(hwnd, WM_COMMAND, (WPARAM)IDM_playSTART, 0);
+                //MessageBox(NULL, TEXT("dblclick +"), NULL, MB_ICONWARNING);
+            }
+        return 0;
     case WM_LBUTTONUP:
         if (playing) {
             waveOutRestart(hWaveOut);
         }
+        break;
     case WM_LBUTTONDOWN:
         if (playing) {
             POINT pt;
@@ -558,7 +578,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             waveOutReset(hWaveOut);
         }
         active=TRUE;
-        return 0;
+        break;
 
     case WM_CREATE: {
         INITCOMMONCONTROLSEX ic;
@@ -648,6 +668,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         DWORD srate;
         DWORD byte;
         RECT rw, rs;
+        DWORD flashPosR,flashPosP,recMarkPos;
         GetWindowRect(hwnd, &rw);
         GetClientRect(hwnd, &rc);
         GetClientRect(hwndStatus, &rs);
@@ -681,13 +702,32 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         Rectangle(hdc, 0, 0, boxx, boxy);
         if (bg_ready2) BitBlt(hdc, 0, center - bg_hight / 2, bg_width, bg_boxy, hMemDC2, 0, 0, SRCCOPY);
         else if (bg_ready) BitBlt(hdc, 0, center - bg_hight / 2, bg_width, bg_boxy, hMemDC, 0, 0, SRCCOPY);
+        flashPosR = flashPosP = 0;
+        recMarkPos = 22;
         if(startflash) {
-            if(playing) SelectObject(hdc, GetStockObject(WHITE_BRUSH));
-            else SelectObject(hdc, brush1);
+            if (playing) {
+                SelectObject(hdc, GetStockObject(WHITE_BRUSH));
+                flashPosP = 25;
+            }
+            else {
+                SelectObject(hdc, brush1);
+                flashPosR = 25;
+            }
             Rectangle(hdc, 0, 0, boxx, center / 4);
             Rectangle(hdc, 0, boxy, boxx, boxy - center / 4);
             startflash = FALSE;
         }
+        // RecMark
+        SelectObject(hdc, penwav1);
+        LINE(recMarkPos, center + center / 2, recMarkPos + flashPosR, center + center / 2 + center / 4);
+        LINE(recMarkPos + 4, center + center / 2, recMarkPos + 4 + flashPosR, center + center / 2 + center / 4);
+        LINE(recMarkPos + 12, center + center / 2, recMarkPos + 12 + flashPosR, center + center / 2 + center / 4);
+        LINE(recMarkPos + 16, center + center / 2, recMarkPos + 16 + flashPosR, center + center / 2 + center / 4);
+        SelectObject(hdc, penplaymark);
+        LINE(boxx - recMarkPos - flashPosP, center + center / 2, boxx - recMarkPos, center + center / 2 + center / 4);
+        LINE(boxx - recMarkPos - 4 - flashPosP, center + center / 2, boxx - recMarkPos - 4, center + center / 2 + center / 4);
+        LINE(boxx - recMarkPos - 12 - flashPosP, center + center / 2, boxx - recMarkPos - 12, center + center / 2 + center / 4);
+        LINE(boxx - recMarkPos - 16 - flashPosP, center + center / 2, boxx - recMarkPos - 16, center + center / 2 + center / 4);
         if (usePlaySkip || !playing) {
             ty=(0x8000*per / hrate)*ystep;
             SelectObject(hdc, penlineC);
@@ -1235,7 +1275,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
 
     case WM_CLOSE:
-        if (!stopAll) recEnd(hwnd, hwi, bufferNumR, recordedSize, lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
+        if (!finish) recEnd(hwnd, hwi, bufferNumR, recordedSize, lapseRec, lapseRecordedSize, recsec, timer, logstep, per);
         if (playing) {
             playing = FALSE;
             waveOutReset(hWaveOut);
