@@ -7,6 +7,7 @@
 
 #define MAX_LOADSTRING 1000
 #define playpicmax 1000
+#define FoldLimit 20
 
 #define PIC_ON 0
 #define LINE(x0,y0,x1,y1) \
@@ -250,6 +251,30 @@ INT recEnd(HWND hwnd, HWAVEIN &hwi, INT bufferNumR,DWORD recordedSize,BOOL lapse
     return res;
 }
 
+void fold(WORD type,WORD bps,LPBYTE buffer,LPBYTE addbuffer,DWORD size)
+{
+    DWORD c;
+    if (type == WAVE_FORMAT_IEEE_FLOAT) {
+        if (bps == 32)
+            for (c = 0;c < size / (bps / 8);c++)
+                ((FLOAT*)buffer)[c] += ((FLOAT*)addbuffer)[c];
+        else if (bps == 64)
+            for (c = 0;c < size / (bps / 8);c++)
+                ((DOUBLE*)buffer)[c] += ((DOUBLE*)addbuffer)[c];
+    }
+    else {
+        if (bps == 8)
+            for (c = 0;c < size / (bps / 8);c++)
+                buffer[c] += addbuffer[c];
+        else if (bps == 16)
+            for (c = 0;c < size / (bps / 8);c++)
+                ((SHORT*)buffer)[c] += ((SHORT*)addbuffer)[c];
+        else if (bps == 32)
+            for (c = 0;c < size / (bps / 8);c++)
+                ((LONG*)buffer)[c] += ((LONG*)addbuffer)[c];
+    }
+}
+
 void test(DWORD x, DWORD y)
 {
 }
@@ -280,6 +305,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        timerc = 0;
     static LPBYTE       lpWaveData[bufferNum];
     static LPBYTE       picBuffer;
+    static LPBYTE       foldBuffer;
     static HWAVEIN      hwi = NULL;
     static HWAVEOUT     hWaveOut;
     static WAVEHDR      wh[bufferNum];
@@ -300,6 +326,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static DWORD        activeCount = 0;
     static BOOL         nowRecording = FALSE;
     static BOOL         recMode = FALSE;
+    static LONG         foldMode = 0;
+    BOOL                shiftON;
     static LONG         playskip = 0;
     static LONG         playskipBaseSec = 1;
     static LONG         playskipBaseByte;
@@ -308,7 +336,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static FLOAT        perstep = 0.005;
     static FLOAT        perstepshift = 10;
     static FLOAT        picstep = 0.5;
-    DWORD        shiftrate = 1;
+    DWORD               shiftrate = 1;
     static DWORD        recsec;
     static BOOL         stop = FALSE;
     static BOOL         finish = FALSE;
@@ -359,7 +387,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     static future<void> bgwork;
 
     DWORD ny, lx, ly, xover, tx, ty;
-    DWORD dy, dx;
+    DWORD dy, dx, xx, yy;
     DOUBLE nx;
     RECT rc;
     ULONG i;
@@ -457,16 +485,29 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     }
     break;
     case WM_KEYDOWN:
-        if (GetKeyState(VK_SHIFT) < 0)
-        {
+        BOOL statusDone;
+        statusDone = FALSE;
+        if (GetKeyState(VK_SHIFT) < 0) {
             shiftr = perstepshift;
             shiftrate = 2;
+            shiftON = TRUE;
+        }
+        else {
+            shiftON = FALSE;
         }
         switch(wParam){
         case 'R':
             //reset whole wave pic, for debug..
             bg_ready = FALSE;
             bg_ready2 = FALSE;
+            break;
+        case 'F':
+            if(!shiftON) foldMode += 1;
+            else if(foldMode > 0) foldMode -= 1;
+            if (foldMode > FoldLimit) foldMode = 0;
+            wsprintf(szBuf, TEXT("fold %d"), foldMode);
+            SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+            statusDone = TRUE;
             break;
         case VK_DOWN:
         case '-':
@@ -475,6 +516,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         case VK_UP:
         case '+':
             if (per < 1.0) per += perstep*shiftr;
+            InvalidateRect(hwnd, NULL, TRUE);
             break;
         case VK_LEFT:
             if (playing) {
@@ -516,8 +558,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             }
             break;
         }
-        wsprintf(szBuf, TEXT("ky %d"), wParam);
-        SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+        if (!statusDone) {
+            wsprintf(szBuf, TEXT("ky %d"), wParam);
+            SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
+        }
         active=TRUE;
         InvalidateRect(hwnd, NULL, FALSE);
         Sleep(100);
@@ -613,8 +657,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         dwDataSize = wf.nAvgBytesPerSec / 10 * dwRecordDeciSecond;
         readbuffersize = dwDataSize;
         picBuffer = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, dwDataSize);
+        foldBuffer = (LPBYTE)HeapAlloc(GetProcessHeap(), 0, dwDataSize);
 
-        if (!picBuffer) {
+        if (!picBuffer||!foldBuffer) {
             MessageBox(NULL, TEXT("pic memory‚ªŠm•Û‚Å‚«‚Ü‚¹‚ñB"), NULL, MB_ICONWARNING);
             return -1;
         }
@@ -710,12 +755,38 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                 flashPosP = 25;
             }
             else {
-                SelectObject(hdc, brush1);
+                SelectObject(hdc, brushL);
                 flashPosR = 25;
             }
-            Rectangle(hdc, 0, 0, boxx, center / 4);
-            Rectangle(hdc, 0, boxy, boxx, boxy - center / 4);
+            Rectangle(hdc, 0, 0, boxx, center / 2.2);
+            Rectangle(hdc, 0, boxy, boxx, boxy - center / 6);
             startflash = FALSE;
+        }
+        // mark of recording now
+        if (recMode) {
+            ty = 8;
+            SelectObject(hdc, brushL);
+            Rectangle(hdc, 0, 0, boxx, ty);
+            SelectObject(hdc, brushR);
+            Rectangle(hdc, 0, boxy, boxx, boxy - ty);
+        }
+        if (recMode || playing) {
+            SelectObject(hdc, GetStockObject(BLACK_BRUSH));
+            if (playing) {
+                SelectObject(hdc, brushPl);
+                SelectObject(hdc, penplaying);
+            }
+            else {
+                SelectObject(hdc, brushL);
+            }
+            ty=10;
+            tx=boxx-ty;
+            xx=20;
+            yy=xx;
+            Rectangle(hdc, tx, ty, tx-xx, ty+yy);
+            if (playing) {
+                for(auto i=1; i<foldMode+1; i++) LINE(tx, ty + yy + 2*i, tx - xx, ty + yy + 2*i);
+            }
         }
         // RecMark
         SelectObject(hdc, penwav1);
@@ -1198,6 +1269,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
                     playpos += readbuffersize;
                     playskipTotal += readbuffersize;
                 }
+                if (foldMode>0)
+                {
+                    for(auto i=0; i<foldMode; i++){
+                        if(!in.eof() && in.read((char *)foldBuffer, readbuffersize)) {
+                            fold(wf.wFormatTag, wf.wBitsPerSample, picBuffer, foldBuffer, readbuffersize);
+                            playpos += readbuffersize;
+                            playskipTotal += readbuffersize;
+                        }
+                    }
+                }
                 memcpy(((PWAVEHDR)lParam)->lpData, (const char *)picBuffer,readbuffersize);
                 waveOutWrite(hWaveOut, (PWAVEHDR)lParam, sizeof(WAVEHDR));
             }
@@ -1231,6 +1312,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         wsprintf(szBuf, TEXT("pl close %d.."), playpos);
         SendMessage(hwndStatus, SB_SETTEXT, 255 | 0, (LPARAM)szBuf);
         playing = FALSE;
+        if (!bg_ready2) bgwork.get();
         KillTimer(hwnd, 1);
         break;
 
@@ -1305,6 +1387,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
             {
                 HeapFree(GetProcessHeap(), 0, lpWaveData[i]);
             }
+        HeapFree(GetProcessHeap(), 0, picBuffer);
+        HeapFree(GetProcessHeap(), 0, foldBuffer);
         fftwDestroy();
         PostQuitMessage(0);
 
